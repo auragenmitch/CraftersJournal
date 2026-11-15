@@ -322,6 +322,7 @@ local function CreateMini(ahFrame)
     ES.shopMiniClosed = true
     p:Hide()
   end)
+  ES:OptionsGear(p, close) -- (abre las opciones, donde se quita esta ventana)
 
   p.progressText = p:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
   p.progressText:SetPoint("TOPLEFT", 12, -44)
@@ -485,6 +486,7 @@ function ES:SetupShoppingMini(ahFrame)
   ES:PlaceShoppingMini()
   -- (desactivada en las opciones, no sale sola: el botón de la AH la abre a mano)
   mini:SetShown(ES:AuctionWindowsOn() and ES.Shopping.HasPending())
+  if mini:IsShown() then ES:WindowTip("shopping") end -- (la primera vez: se puede quitar en /cj opciones)
   ES:RenderShopping()
 end
 

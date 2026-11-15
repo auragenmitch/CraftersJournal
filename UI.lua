@@ -18,8 +18,16 @@ local CoinString = (C_CurrencyInfo and C_CurrencyInfo.GetCoinTextureString) or G
   end
 
 local function Money(copper)
-  if not copper then return "|cff888888—|r" end
-  return CoinString(math.floor(copper + 0.5))
+  copper = tonumber(copper)
+  -- Sin cantidad, NaN (no es igual a sí mismo) o infinito: una raya, no un error
+  if not copper or copper ~= copper or copper == math.huge or copper == -math.huge then
+    return "|cff888888—|r"
+  end
+  copper = math.floor(copper + 0.5)
+  -- GetCoinTextureString solo acepta positivos (con negativos daba error: registro de
+  -- errores de la 0.44, aviso de ruta que cuesta más): el signo va delante
+  if copper < 0 then return "-" .. CoinString(-copper) end
+  return CoinString(copper)
 end
 ES.Money = Money
 
@@ -349,7 +357,8 @@ function ES:FlashTab(key, sound)
         up:SetFromAlpha(0) up:SetToAlpha(0.55) up:SetDuration(0.35) up:SetOrder(1)
         local down = ag:CreateAnimation("Alpha")
         down:SetFromAlpha(0.55) down:SetToAlpha(0) down:SetDuration(0.35) down:SetOrder(2)
-        ag:SetLoopType("REPEAT")
+        -- (SetLooping: SetLoopType no existe y daba error cada vez, sin brillo)
+        ag:SetLooping("REPEAT")
         tab.flashAnim = ag
       end
       tab.flashAnim:Stop()
@@ -512,11 +521,24 @@ end
 -- `followed`: el escaneo lo pidió otro addon (ForeverForge al abrir la AH) y solo se
 -- leyeron sus datos: no se abre la ventana, que si no se abría sola cada vez que
 -- abrías la AH. Con el escaneo que pides tú (botón Escanear), sí, para ver el resultado
+-- Cada parte en su fotograma (todo junto era un tirón al acabar el escaneo), y lo que
+-- tarda cada una al registro de escaneos (/cj, Informar de un error)
 function ES:OnScanComplete(scan, followed)
   if not followed then self:ShowMainFrame() end
-  self:RefreshAllViews() -- precios nuevos: todos los apartados
-  self.Collection:AlertScan(scan) -- pergaminos de botín que te faltan, en la AH
-  self:AnnounceRouteDrift() -- ruta empezada que ahora cuesta bastante más
+  local function Timed(label, f)
+    local t = debugprofilestop and debugprofilestop()
+    f()
+    if t then ES:ScanLog(string.format("%s: %.0f ms", label, debugprofilestop() - t)) end
+  end
+  Timed("vistas", function() self:RefreshAllViews() end) -- precios nuevos: todos los apartados
+  C_Timer.After(0, function()
+    -- pergaminos de botín que te faltan, en la AH
+    Timed("recetas en la AH", function() self.Collection:AlertScan(scan) end)
+    C_Timer.After(0, function()
+      -- ruta empezada que ahora cuesta bastante más
+      Timed("ruta empezada", function() self:AnnounceRouteDrift() end)
+    end)
+  end)
 end
 
 ---------------------------------------------------------------------------

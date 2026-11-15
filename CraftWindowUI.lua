@@ -116,6 +116,7 @@ local function CreatePanel(parent)
     Craft.closed = true -- (hasta la próxima vez que abras la profesión)
     f:Hide()
   end)
+  ES:OptionsGear(f, close) -- (abre las opciones, donde se quita esta ventana)
   f.sub = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   f.sub:SetPoint("TOPLEFT", f.title, "BOTTOMLEFT", 0, -3)
   f.sub:SetWidth(WIDTH - 24)
@@ -218,6 +219,7 @@ function Craft:Refresh()
   y = y - 4 - math.max(14, math.min(tonumber(panel.hint:GetStringHeight()) or 0, 40))
   panel:SetHeight(-y + 10)
   panel:Show()
+  ES:WindowTip("craft") -- (la primera vez: se puede quitar en /cj opciones)
 end
 
 do

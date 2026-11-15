@@ -1,5 +1,15 @@
 # Crafter's Journal
 
+## 0.55.1
+
+- **Upstream 0.55.0, plus the fixes below.** This build is upstream 0.55.0-forever with the 0.53.1 changes kept: Auctionator prices, can't-miss gear, the opt-in two-click AH sell window, not suggesting consumables, quest items or recent purchases for sale, the missing-recipe alert off by default, and quest recipe pricing.
+- **German and French.** Texts, recipe names and item names, using the game's own names. Switch with the language selector at the top.
+- **Each popup window has its own gear button.** The windows that open next to a vendor, the Auction House and a profession open the options from a gear button. The first time each one opens, chat says you can turn it off.
+- **Routes no longer chain cooldown recipes.** Transmutes and Mooncloth are used for one orange point at most, not dozens in a row.
+- **Saving an Auction House scan no longer freezes the game.** Prices are written a bit at a time. A trainer that is not for a crafting profession (Smelt Gold on a mining trainer) is no longer recorded as the matching crafting recipe (Transmute: Iron to Gold at 155 instead of 225).
+- **The shopping list sits next to the AH again** when you close the sell window, instead of leaving a gap. Money amounts that are negative, missing or not a number draw as a dash or with a minus sign, instead of erroring.
+- **Can't-miss gear you pick is a step on the route, with a waypoint.** Pieces showed in the gear window and then never joined the leveling route. Two things dropped them. A pattern you have not learned was ignored unless a vendor, a quest or the Auction House could supply it right then, so a drop pattern (the test only checked a trainer recipe, Toughened Leather Gloves) never became a step. And a route you had already started kept its old recipe list and threw the picks away. Picked pieces are now crafted on the route anyway, including on a started route, which keeps its other steps. The get-recipe row marks the trainer, the vendor, or a creature that drops the pattern.
+
 ## 0.53.1
 
 - **The version line matches what actually ships.** This is upstream 0.53.0 plus the changes that follow: the Auctionator price fallback, can't-miss gear picks, opt-in two-click AH selling, not suggesting consumables, quest items or recent purchases for sale, the missing-recipe alert off by default, and quest recipe pricing. The addon's version is 0.53.1.

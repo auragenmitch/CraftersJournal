@@ -175,7 +175,7 @@ local function Render()
   for k = n + 1, #panel.rows do panel.rows[k]:Hide() end
   panel.content:SetHeight(math.max(1, y))
   local lock = ES:RouteLock(profKey)
-  panel.note:SetText(lock and (ORANGE .. L["Tu ruta empezada no cambia: estos cambios cuentan para la próxima (Dejar ruta para recalcularla)."] .. "|r")
+  panel.note:SetText(lock and (ORANGE .. L["Tu ruta empezada incluye estas piezas; el resto de sus pasos se queda."] .. "|r")
     or (GREY .. L["Cada cambio recalcula la ruta."] .. "|r"))
   local h = 86 + math.min(y, MAX_H - 120) + 34
   panel:SetHeight(h)

@@ -35,6 +35,63 @@ function ES:AuctionWindowsOn() return not (self.db and self.db.noAuctionWindows)
 function ES:AuctionSellWindowOn() return self:AuctionWindowsOn() and self.db and self.db.auctionSellWindow == true end
 function ES:CraftWindowOn() return not (self.db and self.db.noCraftWindow) end
 
+-- Una vez al entrar (Core.lua). Upstream separó la lista de compra de la ventana de
+-- vender; aquí la de vender sigue siendo opt-in (auctionSellWindow, dos clics), así
+-- que no se enciende sola ni se borra lo que ya elegiste
+function ES:MigrateWindowOptions()
+  local db = self.db
+  if not db or db.sellWindowSplit then return end
+  db.sellWindowSplit = true
+end
+
+-- La primera vez que sale sola cada ventana (junto al vendedor, la AH o la
+-- profesión), un aviso en el chat: se puede quitar en /cj opciones
+local TIPS = {
+  vendor = "Esta ventana sale sola al abrir un vendedor. Si no la quieres, quítala en /cj opciones.",
+  shopping = "La lista de compra sale sola al abrir la Casa de Subastas. Si no la quieres, quítala en /cj opciones.",
+  sell = "La ventana de vender en la AH sale sola al abrir la Casa de Subastas. Si no la quieres, quítala en /cj opciones.",
+  craft = "Esta ventana sale sola al abrir una profesión. Si no la quieres, quítala en /cj opciones.",
+}
+-- Engranaje en la esquina de las ventanas que salen solas (vendedor, AH, profesión):
+-- abre estas opciones, donde se quita. `close`: su ✕, si tiene (va a su izquierda)
+function ES:OptionsGear(frame, close)
+  local b = CreateFrame("Button", nil, frame)
+  b:SetSize(18, 18)
+  if close then b:SetPoint("RIGHT", close, "LEFT", 0, -1) else b:SetPoint("TOPRIGHT", -9, -9) end
+  local GEAR = "Interface\\Buttons\\UI-OptionsButton"
+  b:SetNormalTexture(GEAR)
+  local normal = b:GetNormalTexture()
+  if normal and normal.SetVertexColor then normal:SetVertexColor(0.8, 0.7, 0.5) end
+  b:SetHighlightTexture(GEAR, "ADD")
+  b:SetPushedTexture(GEAR)
+  local pushed = b:GetPushedTexture()
+  if pushed then
+    pushed:ClearAllPoints()
+    pushed:SetPoint("TOPLEFT", 1, -1)
+    pushed:SetPoint("BOTTOMRIGHT", 1, -1)
+    if pushed.SetVertexColor then pushed:SetVertexColor(0.6, 0.5, 0.35) end
+  end
+  b:SetScript("OnClick", function() ES:OpenOptions() end)
+  b:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:AddLine(L["Opciones"])
+    GameTooltip:AddLine(L["Si no quieres que esta ventana salga sola, quítala en las opciones."], 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  frame.optionsGear = b
+  return b
+end
+
+function ES:WindowTip(kind)
+  local db = self.db
+  if not db or not TIPS[kind] then return end
+  if type(db.windowTips) ~= "table" then db.windowTips = {} end
+  if db.windowTips[kind] then return end
+  db.windowTips[kind] = true
+  self:Print(L[TIPS[kind]])
+end
+
 -- Cambia una opción (on: la casilla marcada) y lo aplica al momento: la pestaña
 -- Inventario y las ventanas del vendedor y la AH, si están abiertos
 function ES:SetOption(key, on)

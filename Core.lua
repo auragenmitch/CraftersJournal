@@ -115,7 +115,7 @@ function ES.Num(x)
   if not x then return "—" end
   if math.abs(x) >= 10 then return tostring(math.floor(x + 0.5)) end
   local s = string.format("%.1f", x):gsub("%.0$", "")
-  if ES.lang == "es" then s = s:gsub("%.", ",") end -- en inglés, punto decimal
+  if ES.lang ~= "en" then s = s:gsub("%.", ",") end -- (coma en español, alemán y francés; punto en inglés)
   return s
 end
 
@@ -173,14 +173,19 @@ end
 local GetItemInfoCompat = (C_Item and C_Item.GetItemInfo) or GetItemInfo
 local GetItemInfoInstantCompat = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
 
--- Nombre de un objeto en el idioma del addon según los datos propios: español
--- (Data/Names_esES.lua) o inglés (ES.Data.ItemNames); nil si no lo tenemos
+-- Nombres de recetas y objetos de un idioma (Data/Names_esES.lua, _deDE, _frFR; los
+-- genera tools/gen_names.py): { spells, items }, o nil (inglés: los de los datos)
+function ES.NamesFor(lang)
+  return ES.Data.Names and ES.Data.Names[lang]
+end
+
+-- Nombre de un objeto en el idioma del addon según los datos propios (Data/Names_*.lua)
+-- o en inglés (ES.Data.ItemNames); nil si no lo tenemos
 function ES:DataItemName(itemID)
-  if self.lang == "es" then
-    local es = ES.Data.NamesES and ES.Data.NamesES.items[itemID]
-    if es then return es end
-  end
-  return ES.Data.ItemNames and ES.Data.ItemNames[itemID] -- en español, si no cambia, es igual que en inglés
+  local names = ES.NamesFor(self.lang)
+  local local_ = names and names.items[itemID]
+  if local_ then return local_ end
+  return ES.Data.ItemNames and ES.Data.ItemNames[itemID] -- si no cambia, es igual que en inglés
 end
 
 -- Datos de un objeto. El nombre que da el juego va en el idioma del cliente: si el
@@ -194,13 +199,15 @@ function ES:GetItemData(itemID)
   return name, quality, texture
 end
 
--- Recetas con el nombre en el idioma del addon: en español, el de Data/Names_esES.lua;
--- en inglés, el original (guardado en nameEN, que también usa el buscador)
+-- Recetas con el nombre en el idioma del addon: el de Data/Names_<idioma>.lua; en
+-- inglés (o si ese idioma no lo cambia), el original (guardado en nameEN, que también
+-- usa el buscador)
 function ES:LocalizeRecipeNames()
-  local names = ES.Data.NamesES and ES.Data.NamesES.spells or {}
+  local set = ES.NamesFor(self.lang)
+  local names = set and set.spells or {}
   for _, prof in ipairs(self.PROFESSIONS) do
     for id, r in pairs(ES.Data[prof.key] and ES.Data[prof.key].recipes or {}) do
-      if self.lang == "es" and names[id] then
+      if names[id] then
         r.nameEN = r.nameEN or r.name
         r.name = names[id]
       elseif r.nameEN then
@@ -674,6 +681,9 @@ events:SetScript("OnEvent", function(_, event, arg1)
     ES.db.activeAH = nil -- (la última AH abierta: siempre es la de tu facción, ver RealmKey)
     ES.db.sellGear = nil -- (la opción del equipo es ahora protectGear, desactivada por defecto)
     ES.db.atrPrices = nil -- (precios de las búsquedas en Auctionator: ya no hay botón)
+    ES:MigrateWindowOptions() -- (la ventana de vender en la AH, ahora con su propia opción)
+    ES.db.devTools = nil -- (/cj devtools de una prueba: ahora es DevTools.lua, sin publicar)
+    ES.Ledger:CleanTrainerFees() -- (lecturas de instructor con un nivel equivocado, una vez)
     ES.ApplyLocalization()
     ES:LocalizeRecipeNames()
   elseif event == "PLAYER_LOGOUT" then
@@ -735,6 +745,8 @@ SLASH_CRAFTERSJOURNAL2 = "/cj"
 SLASH_CRAFTERSJOURNAL3 = "/es" -- el de antes (cuando se llamaba EasySkills)
 SlashCmdList.CRAFTERSJOURNAL = function(msg)
   msg = strtrim(msg or ""):lower()
+  -- Comandos del desarrollador (DevTools.lua: solo en su copia, no se publica)
+  if ES.DevCommand and ES.DevCommand(msg) then return end
   if msg == "scan" then
     ES:ShowMainFrame()
     ES.Scanner:Start()

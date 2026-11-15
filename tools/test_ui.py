@@ -2766,7 +2766,9 @@ step("lista de la compra: cuenta lo que hicieron pasos anteriores", function()
     if r and r.out and r.out[1] == item then made = made + r.out[2] / plan.pointChance[s] end
   end
   for _, st in ipairs(plan.steps) do
-    if st.to <= level and st.ahead and st.recipe.out[1] == item then
+    -- Lo fabricado de más al empezar el paso ya está hecho cuando el nivel cae
+    -- dentro de ese paso (st.to todavía no ha llegado)
+    if st.from < level and st.ahead and st.recipe and st.recipe.out and st.recipe.out[1] == item then
       for _, a in ipairs(st.ahead) do made = made + a.quantity end
     end
   end
@@ -3719,7 +3721,9 @@ step("materiales: o se fabrican o se compran, y la ✕ los compra hechos", funct
   page.view = "route"
   ES:CalculatePlan(page)
   local craftLine
-  for _, l in ipairs(page.lines) do if l.skipTip and l.onSkip then craftLine = l end end
+  for _, l in ipairs(page.lines) do
+    if l.skipTip and l.onSkip and tostring(l.skipTip):find("compra hecho") then craftLine = l end
+  end
   if craftLine then
     craftLine.onSkip()
     assert(ES.db.prof.Leatherworking.noCraft and next(ES.db.prof.Leatherworking.noCraft), "la ✕ no apuntó el material")
@@ -4260,6 +4264,84 @@ step("equipo imprescindible: piezas para tu clase y especialización en la ruta"
   for _, line in ipairs(page.lines or {}) do if line.gearKeep then marked = line end end
   ES.db.scans[key] = savedScan2
   assert(marked and tostring(marked.sub):find("UI%-RaidTargetingIcon_1"), "el paso de la pieza no lleva la marca de imprescindible")
+  -- La prueba de arriba pasa con una receta de instructor y sin ruta empezada. En el
+  -- juego, un pergamino de botín que aún no sabes no entraba (LearnSkill lo tiraba)
+  -- y una ruta empezada tiraba opts.pinned, así que la pieza se veía en la ventana
+  -- y no en la ruta ni en sus puntos de ruta
+  local ARMOR = 15056 -- Stormshroud Armor (19079), pergamino 15753, lo suelta 6138
+  local savedInfo, savedInstant, savedStatsFn, savedLevel, savedKnown = GetItemInfo, GetItemInfoInstant, GetItemStats, UnitLevel, ES.IsRecipeKnown
+  UnitLevel = function() return 60 end
+  GetItemInfoInstant = function(id)
+    if id == ARMOR then return id, "Armor", "Leather", "INVTYPE_CHEST", 134400, 4, 2 end
+    return savedInstant(id)
+  end
+  GetItemInfo = function(id)
+    if id == ARMOR then return "Stormshroud Armor", "link15056", 3, 57, 57, "Armor", "Leather", 1, "INVTYPE_CHEST", 134400, 100, 4, 2 end
+    return savedInfo(id)
+  end
+  GetItemStats = function(link)
+    if link == "link15056" then return { ITEM_MOD_AGILITY_SHORT = 12 } end
+    return savedStatsFn(link)
+  end
+  ES.IsRecipeKnown = function() return false end
+  local dropItems = {}
+  for id, e in pairs(items) do dropItems[id] = e end
+  for _, rq in ipairs(ES.Data.Leatherworking.recipes[19079].r) do dropItems[rq[1]] = { minUnit = 100, quantity = 500 } end
+  dropItems[15753] = nil
+  ES.db.scans[key] = { time = time(), items = dropItems }
+  Gear.ClearCache()
+  Gear:Changed()
+  Gear:SetQty("Leatherworking", 19079, 1)
+  local dopts = ES:PlanOptions("Leatherworking", 250, 300, nil)
+  assert(dopts.pinned and dopts.pinned[260] == 19079, "el pergamino de botín que no sabes no se clava: " .. tostring(dopts.pinned and dopts.pinned[260]))
+  local dplan = ES.Planner:Plan(ES.Data.Leatherworking, dopts)
+  assert(dplan.choice[260] == 19079, "la ruta no fabrica Stormshroud Armor a 260: " .. tostring(dplan.choice[260]))
+  page.from = 250
+  page.toBox._text = "300"
+  ES:CalculatePlan(page)
+  local dropGo, dropMark
+  for _, line in ipairs(page.lines or {}) do
+    if line.go and line.go() == 6138 then dropGo = line end
+    if line.gearKeep and line.gearKeep >= 1 then dropMark = line end
+  end
+  local goSeen = {}
+  for _, line in ipairs(page.lines or {}) do
+    if line.go then goSeen[#goSeen+1] = tostring(line.go()) .. ":" .. tostring(line.title):gsub("|c%x%x%x%x%x%x%x%x", ""):sub(1, 40) end
+  end
+  assert(dropGo, "el pergamino de botín no marca el camino a quien lo suelta (" .. table.concat(goSeen, " | ") .. ")")
+  assert(dropMark, "el paso del pergamino de botín no lleva la marca de imprescindible")
+  Gear:SetQty("Leatherworking", 19079, 0)
+  UnitLevel = savedLevel
+  Gear.ClearCache()
+  Gear:Changed()
+  -- Ruta empezada sin los guantes: al volver a tenerlos en cuenta, entran sin soltar la ruta
+  ES.db.scans[key] = { time = time(), items = items }
+  ES.db.prof.Leatherworking.gearOff = true
+  Gear:Changed()
+  page.from = 100
+  page.toBox._text = "150"
+  ES:StopRoute("Leatherworking")
+  ES:CalculatePlan(page)
+  assert(page.plan and page.plan.choice, "sin ruta para empezar")
+  page.plan.choice[110] = page.plan.choice[109] or page.plan.choice[111] or page.plan.choice[100]
+  assert(page.plan.choice[110] ~= 3770, "no se pudo apartar los guantes de la ruta de prueba")
+  ES:StartRoute(page)
+  ES.db.prof.Leatherworking.gearOff = nil
+  Gear:Changed()
+  ES:CalculatePlan(page)
+  assert(ES:RouteLock("Leatherworking") and page.plan.choice[110] == 3770,
+    "la ruta empezada no recibe los guantes: " .. tostring(page.plan.choice[110]))
+  local startedMark, startedGo
+  for _, line in ipairs(page.lines or {}) do
+    if line.gearKeep then startedMark = line end
+    local title = tostring(line.title or "")
+    if line.go and (title:find("fortalecido") or title:find("Toughened")) then startedGo = line end
+  end
+  assert(startedMark, "la ruta empezada no pinta la pieza")
+  assert(startedGo, "la ruta empezada no marca el camino a aprender los guantes")
+  ES:StopRoute("Leatherworking")
+  GetItemInfo, GetItemInfoInstant, GetItemStats, UnitLevel, ES.IsRecipeKnown = savedInfo, savedInstant, savedStatsFn, savedLevel, savedKnown
+  ES.db.scans[key] = savedScan2
   ES:SelectPage("home")
   UnitClass, UnitLevel, GetItemInfoInstant, GetItemInfo, GetItemStats, GetNumTalentTabs, ES.db.prof.Leatherworking = unpack(saved, 1, 7)
   ES.charData.gearSpec = nil
