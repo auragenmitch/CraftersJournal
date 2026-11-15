@@ -324,19 +324,44 @@ local function RoutePrices(plan)
   return prices, scan and scan.time
 end
 
+-- Precios de una ruta fijada más los del escaneo actual para lo que aquella no
+-- tenía (los materiales de una pieza de equipo elegida después). Lo ya guardado
+-- manda: el resto de la ruta no cambia de precio
+local function LockedPrices(lock)
+  local prices = {}
+  local scan = ES.db.scans and ES.db.scans[ES:RealmKey()]
+  if scan and scan.items then
+    for id, e in pairs(scan.items) do prices[id] = e end
+  end
+  for id, e in pairs(lock.prices or {}) do prices[id] = e end
+  return prices
+end
+
+-- opts.pinned (equipo imprescindible) se deja, filtrado a lo que de verdad se
+-- puede fabricar. Quitarlo hacía que elegir una pieza con la ruta empezada no
+-- la metiera en la ruta ni en sus puntos de ruta: la prueba no empieza la ruta
+local function OverlayGearPins(profKey, opts)
+  if not (opts.pinned and ES.Planner.ValidPins and ES.Planner.NewContext) then return end
+  local data = ES.Data[profKey]
+  local ctx = ES.Planner.NewContext(data, opts)
+  opts.pinned = ES.Planner.ValidPins(data, opts, ctx)
+end
+
 -- La ruta fijada: la de esta sesión tal cual; tras recargar se rehace con las
--- mismas recetas, las bolsas y los precios del principio (una sola pasada: rápido)
+-- mismas recetas, las bolsas y los precios del principio (una sola pasada: rápido).
+-- El equipo imprescindible de ahora se pone encima de esas recetas
 function ES:LockedPlan(profKey)
   local lock = self:RouteLock(profKey)
   if not lock then return nil end
+  local gearKey = self.Gear and self.Gear:Key(profKey) or ""
   local plan = self.lockedPlans[profKey]
-  if plan and plan.lockStarted == lock.started and plan.lockPrices == lock.scanTime then return plan end
+  if plan and plan.lockStarted == lock.started and plan.lockPrices == lock.scanTime and plan.lockGear == gearKey then return plan end
   local opts = self:PlanOptions(profKey, lock.from, lock.to, lock.cap)
   opts.owned, opts.forced, opts.excluded, opts.via, opts.fullInfo = lock.owned, lock.choice, nil, lock.via, true
-  opts.pinned = nil -- (lo elegido ya va en las recetas de la ruta empezada)
-  opts.prices, opts.pricesTime = lock.prices, lock.scanTime
+  opts.prices, opts.pricesTime = LockedPrices(lock), lock.scanTime
+  OverlayGearPins(profKey, opts)
   plan = self.Planner:Plan(ES.Data[profKey], opts)
-  plan.lockStarted, plan.lockPrices = lock.started, lock.scanTime
+  plan.lockStarted, plan.lockPrices, plan.lockGear = lock.started, lock.scanTime, gearKey
   self.lockedPlans[profKey] = plan
   return plan
 end
@@ -348,10 +373,11 @@ function ES:RefreshRoutePrices(profKey)
   if not lock then return end
   local opts = self:PlanOptions(profKey, lock.from, lock.to, lock.cap)
   opts.owned, opts.forced, opts.excluded, opts.via, opts.fullInfo = lock.owned, lock.choice, nil, lock.via, true
-  opts.pinned = nil -- (lo elegido ya va en las recetas de la ruta empezada)
+  OverlayGearPins(profKey, opts)
   local plan = self.Planner:Plan(ES.Data[profKey], opts) -- con el último escaneo
   lock.prices, lock.scanTime = RoutePrices(plan)
   plan.lockStarted, plan.lockPrices = lock.started, lock.scanTime
+  plan.lockGear = self.Gear and self.Gear:Key(profKey) or ""
   self.lockedPlans[profKey] = plan
 end
 
@@ -373,6 +399,7 @@ function ES:StartRoute(page)
     via = via, owned = owned, started = time(), scanTime = scanTime, prices = prices }
   self.db.prof[page.profKey].lock = lock
   plan.lockStarted, plan.lockPrices = lock.started, lock.scanTime
+  plan.lockGear = self.Gear and self.Gear:Key(page.profKey) or ""
   self.lockedPlans[page.profKey] = plan
   self:RenderPlan(page)
   -- Empezar la ruta pone su lista en la Lista de compra (se calcula sola): se avisa
@@ -2456,9 +2483,19 @@ local function RouteLines(plan, page)
       elseif trainer then
         pick, label = WP.Target("trainer", page.profKey, learnAt + 1), L["Instructor más cercano"]
       elseif r.scroll then
-        pick, label = WP.Target("vendor", r.scroll), L["Vendedor más cercano"]
+        -- Pergamino de botín (sin vendedor): el camino va a una criatura que lo suelta,
+        -- no a un vendedor que no existe. Así el equipo imprescindible de botín también
+        -- tiene punto de ruta
+        local drops = WP.Drops(r.scroll)
+        local vendors = WP.Vendors(r.scroll)
+        if drops and drops.npcs and drops.npcs[1] and not (vendors and vendors[1]) then
+          pick, label = function() return drops.npcs[1] end, L["Criatura que suelta la receta"]
+        else
+          pick, label = WP.Target("vendor", r.scroll), L["Vendedor más cercano"]
+        end
       end
-      local title = string.format("%s %s", trainer and L["Entrenar"] or L["Comprar receta:"], r.name)
+      local title = (label == L["Criatura que suelta la receta"]) and (L["Conseguir receta: "] .. r.name)
+        or string.format("%s %s", trainer and L["Entrenar"] or L["Comprar receta:"], r.name)
       lines[#lines + 1] = {
         level = tostring(st.from), -- cuándo toca en la ruta (se puede aprender desde learnAt)
         icon = trainer and TRAIN_ICON or RECIPE_ICON,
@@ -3021,7 +3058,8 @@ function ES:CheckBetterRoute(page)
     local best = self.Planner:Plan(data, self:PlanOptions(profKey, from, lock.to, cap))
     -- La tuya desde tu nivel, con lo que llevas ahora (misma vara)
     local opts = self:PlanOptions(profKey, from, lock.to, cap)
-    opts.forced, opts.via, opts.pinned = lock.choice, lock.via, nil
+    opts.forced, opts.via = lock.choice, lock.via
+    OverlayGearPins(profKey, opts)
     local mine = self.Planner:Plan(data, opts)
     return CompareRoutes(lock, best, mine)
   end, function(result)
@@ -3056,15 +3094,16 @@ function ES:CheckRouteDrift(profKey, onDone, owner)
   local from = math.max(rank or lock.from, lock.from)
   if from >= lock.to then return nil end
   local key = table.concat({ "drift", profKey, tostring(lock.started), tostring(lock.scanTime), tostring(scan.time), from,
-    tostring(cap), tostring(self.Planner.SKILL_BONUS or 0) }, ":")
+    tostring(cap), tostring(self.Planner.SKILL_BONUS or 0), self.Gear and self.Gear:Key(profKey) or "" }, ":")
   local cached = self.driftCache[profKey]
   if cached and cached.key == key then return cached.result end
   self.Jobs.Run("drift:" .. profKey, key, function()
     local data = ES.Data[profKey]
     local function Mine(old)
       local opts = self:PlanOptions(profKey, from, lock.to, cap)
-      opts.forced, opts.via, opts.pinned = lock.choice, lock.via, nil
+      opts.forced, opts.via = lock.choice, lock.via
       if old then opts.prices, opts.pricesTime = lock.prices, lock.scanTime end
+      OverlayGearPins(profKey, opts)
       return self.Planner:Plan(data, opts)
     end
     local before, now = Mine(true), Mine(false)

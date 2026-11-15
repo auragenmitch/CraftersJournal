@@ -9,8 +9,11 @@ local _, ES = ...
 -- La ruta lo incluye como un paso más: en el primer nivel en que la receta se
 -- puede aprender y aún da puntos, ese nivel se sube fabricándola (opts.pinned de
 -- Planner: { [nivel] = receta }). Así la pieza sale del camino de subir y su coste
--- ya va en la ruta, la lista de compra y los materiales. Lo que ya no da puntos
--- desde tu nivel (o está por encima de tu objetivo) sale aparte, sin coste.
+-- ya va en la ruta, la lista de compra y los materiales. También si aún no la sabes
+-- y el pergamino es de botín (no está en la AH): el paso y el camino hasta quien lo
+-- suelta entran igual. Una ruta empezada recibe las piezas encima de lo ya elegido.
+-- Lo que ya no da puntos desde tu nivel (o está por encima de tu objetivo) sale
+-- aparte, sin coste.
 --
 -- Qué te sirve se mira en el juego (GetItemInfo, GetItemStats): tipo de armadura de
 -- tu clase a ese nivel (malla hasta 40 y placas desde 40, etc.), armas que sabes
@@ -366,7 +369,7 @@ function Gear:Pins(profKey, opts)
   local pins = {}
   for _, p in ipairs(self:Picks(profKey)) do
     local r = data.recipes[p.id]
-    local learn = r and not (opts.excluded and opts.excluded[p.id]) and P.LearnSkill(r, opts)
+    local learn = r and not (opts.excluded and opts.excluded[p.id]) and P.GearLearn(r, opts)
     if learn then
       local s, left = math.max(opts.from, learn), p.qty
       local last = math.min(opts.to, r.t[4]) - 1
@@ -397,7 +400,7 @@ function Gear:Status(profKey, plan)
       if st.id == p.id then entry.status, entry.step = "route", st break end
     end
     if not entry.status then
-      local learn = ES.Planner.LearnSkill(r, opts)
+      local learn = ES.Planner.GearLearn(r, opts)
       if not learn then entry.status = "nolearn"
       elseif (opts.from or 1) >= r.t[4] then entry.status = "grey"
       elseif learn >= (opts.to or 300) then entry.status = "above"

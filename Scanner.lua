@@ -230,7 +230,8 @@ function Scanner:CountResults()
 end
 
 function Scanner:Abort(reason)
-  if not self:IsBusy() then return end
+  -- (guardando lo ya leído, ver Finish: no hace falta la AH y se termina)
+  if not self:IsBusy() or self.state == "saving" then return end
   frame:UnregisterAllEvents()
   self:UnmuteOthers()
   self.state = "idle"
@@ -404,13 +405,19 @@ local function BuildLadder(levels)
   return flat, median
 end
 
+-- Resumen de lo leído (escaleras de precios y medianas de cada objeto), por tandas de
+-- FRAME_BUDGET ms como la lectura: con 280.000 subastas son unos 6.500 objetos y de
+-- golpe era un tirón al acabar (CurseForge: "se congela al abrir la AH" con el
+-- escaneo de otro addon). Mientras, el estado es "saving": sigue ocupado (no se
+-- escanea ni se anuncia con los precios de antes) pero cerrar la AH no lo cancela,
+-- los datos ya están leídos
 function Scanner:Finish(items, sigs, total)
   self:UnmuteOthers()
-  self.state = "idle"
 
   -- Un escaneo vacío es un fallo del servidor: guardarlo borraría los precios
   -- buenos y haría creer que todo se ha vendido
   if total == 0 then
+    self.state = "idle"
     local msg = L["El servidor devolvió 0 subastas; no se guarda este escaneo. Inténtalo más tarde."]
     ES:Print(msg)
     SetStatus(msg)
@@ -418,34 +425,63 @@ function Scanner:Finish(items, sigs, total)
     return
   end
 
-  local saved = {}
-  local unique = 0
-  for itemID, e in pairs(items) do
-    unique = unique + 1
-    local sellers, top = 0, 0
-    for _, n in pairs(e.owners) do
-      sellers = sellers + 1
-      if n > top then top = n end
-    end
-    local ladder, median = BuildLadder(e.ladder)
-    saved[itemID] = {
-      listings = e.listings,
-      quantity = e.quantity,
-      minUnit = e.minUnit and math.floor(e.minUnit + 0.5) or nil,
-      avgUnit = e.buyoutQty > 0 and math.floor(e.buyoutTotal / e.buyoutQty + 0.5) or nil,
-      sellers = sellers > 0 and sellers or nil,
-      -- Solo fiable si conocemos el vendedor de al menos la mitad de las subastas
-      topShare = (e.knownOwners or 0) * 2 >= e.listings
-        and math.floor(top / e.knownOwners * 100 + 0.5) / 100 or nil,
-      ladder = ladder,
-      median = median,
-    }
-  end
+  self.state = "saving"
+  local id = self.scanID
+  local ids = {}
+  for itemID in pairs(items) do ids[#ids + 1] = itemID end
+  local saved, knownOwners, i = {}, 0, 1
+  local t0 = debugprofilestop and debugprofilestop()
+  local frames = 0
 
+  local function Step()
+    if self.scanID ~= id then return end
+    frames = frames + 1
+    local started = debugprofilestop and debugprofilestop()
+    local stop = started and #ids or math.min(i + BATCH_SIZE - 1, #ids)
+    while i <= stop do
+      local itemID = ids[i]
+      local e = items[itemID]
+      knownOwners = knownOwners + (e.knownOwners or 0)
+      local sellers, top = 0, 0
+      for _, n in pairs(e.owners) do
+        sellers = sellers + 1
+        if n > top then top = n end
+      end
+      local ladder, median = BuildLadder(e.ladder)
+      saved[itemID] = {
+        listings = e.listings,
+        quantity = e.quantity,
+        minUnit = e.minUnit and math.floor(e.minUnit + 0.5) or nil,
+        avgUnit = e.buyoutQty > 0 and math.floor(e.buyoutTotal / e.buyoutQty + 0.5) or nil,
+        sellers = sellers > 0 and sellers or nil,
+        -- Solo fiable si conocemos el vendedor de al menos la mitad de las subastas
+        topShare = (e.knownOwners or 0) * 2 >= e.listings
+          and math.floor(top / e.knownOwners * 100 + 0.5) / 100 or nil,
+        ladder = ladder,
+        median = median,
+      }
+      i = i + 1
+      if started and i % 50 == 0 and debugprofilestop() - started > FRAME_BUDGET then break end
+    end
+    if i <= #ids then
+      -- Fuera del juego no hay fotogramas: se termina del tirón (las pruebas no
+      -- ejecutan C_Timer). En el juego, un trozo por fotograma para no congelarlo
+      if debugprofilestop then C_Timer.After(0, Step) else Step() end
+      return
+    end
+    if t0 then
+      ES:ScanLog(string.format("resumen: %d objetos en %d fotogramas, %.0f ms", #ids, frames, debugprofilestop() - t0))
+    end
+    self:Save(saved, #ids, knownOwners, sigs, total)
+  end
+  Step()
+end
+
+-- Guarda el escaneo resumido (ver Finish) y avisa a las vistas
+function Scanner:Save(saved, unique, knownOwners, sigs, total)
+  self.state = "idle"
   local now = time()
   local key = self.key or ES:RealmKey()
-  local knownOwners = 0
-  for _, e in pairs(items) do knownOwners = knownOwners + (e.knownOwners or 0) end
   local scan = { time = now, total = total, unique = unique, items = saved,
     ownerPct = total > 0 and math.floor(knownOwners / total * 100 + 0.5) or 0 }
   ES.db.scans[key] = scan
@@ -494,11 +530,12 @@ function Scanner:OnForeignScan(api)
     return
   end
   -- Leer el escaneo de otro addon congela el juego unos segundos al abrir la AH
-  -- (CurseForge). No se lee si lo desactivas (ES.db.noFollowScans, Options.lua) ni si
-  -- tus precios son de hace menos de FOLLOW_FRESH: apenas habrán cambiado
+  -- (CurseForge). No se lee si lo desactivas (ES.db.noFollowScans o noForeignScans,
+  -- Options.lua) ni si tus precios son de hace menos de FOLLOW_FRESH
   local scan = ES.db.scans and ES.db.scans[ES:RealmKey()]
-  if not self:IsBusy() and (ES.db.noFollowScans or (scan and time() - (scan.time or 0) < FOLLOW_FRESH)) then
-    ES:ScanLog(ES.db.noFollowScans and "no se lee (opción)" or "no se lee: precios recientes")
+  local optedOut = ES.db.noFollowScans or ES.db.noForeignScans
+  if not self:IsBusy() and (optedOut or (scan and time() - (scan.time or 0) < FOLLOW_FRESH)) then
+    ES:ScanLog(optedOut and "no se lee (opción)" or "no se lee: precios recientes")
     SetStatus(string.format(L["Otro addon acaba de pedir un escaneo completo: el servidor no permitirá otro hasta dentro de %s."],
       ES.Countdown(self:SecondsUntilNextScan())))
     ES:RefreshScanButtons()

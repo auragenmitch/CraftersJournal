@@ -304,6 +304,7 @@ local function CreatePanel()
   f:SetBackdropBorderColor(0.52, 0.38, 0.17, 1)
   f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   f.title:SetPoint("TOPLEFT", 12, -10)
+  ES:OptionsGear(f) -- (abre las opciones, donde se quita esta ventana)
   f.sub = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   f.sub:SetPoint("TOPLEFT", f.title, "BOTTOMLEFT", 0, -3)
   f.sub:SetWidth(WIDTH - 24)
@@ -493,6 +494,7 @@ function Vendor:Refresh()
   end
   panel:SetHeight(-y + 10)
   panel:Show()
+  ES:WindowTip("vendor") -- (la primera vez: se puede quitar en /cj opciones)
 end
 
 do

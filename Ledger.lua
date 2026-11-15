@@ -109,19 +109,25 @@ end
 Ledger.BaseCost = BaseCost
 
 -- Receta de la casilla `i` del instructor: por enlace (hechizo/encantamiento u objeto
--- fabricado) o por nombre (el del juego, en su idioma)
-local function ServiceRecipe(i, profs)
+-- fabricado) o por nombre (el del juego, en su idioma). `exact`: el instructor no es de
+-- una profesión del addon (minería...): solo por el hechizo. Por el objeto, "Smelt
+-- Gold" (Minería 155, Gold Bar) se tomaba por Transmute: Iron to Gold y la ruta la
+-- aprendía a 155 (Discord: pide 225)
+local function ServiceRecipe(i, profs, exact)
   local link = GetTrainerServiceItemLink and GetTrainerServiceItemLink(i)
   local spell = link and tonumber(link:match("spell:(%d+)") or link:match("enchant:(%d+)"))
   local item = link and tonumber(link:match("item:(%d+)"))
   local name = GetTrainerServiceInfo and (GetTrainerServiceInfo(i))
-  local names = ES.Data.NamesES and ES.Data.NamesES.spells or {}
+  -- (el instructor habla el idioma del cliente, no el del addon)
+  local set = ES.NamesFor(ES.DefaultLanguage())
+  local names = set and set.spells or {}
   local byName = {}
   for _, key in ipairs(profs) do
     for id, r in pairs(ES.Data[key].recipes) do
       if spell == id then return id, r, key end
-      if item and r.out and r.out[1] == item then return id, r, key end
-      if name and (name == r.name or name == r.nameEN or name == names[id] or name == SpellName(id)) then
+      if exact then -- (solo el hechizo: ver arriba)
+      elseif item and r.out and r.out[1] == item then return id, r, key
+      elseif name and (name == r.name or name == r.nameEN or name == names[id] or name == SpellName(id)) then
         byName[#byName + 1] = { id, r, key }
       end
     end
@@ -134,6 +140,33 @@ end
 -- se dejan como estaban. Solo al abrirlo (TRAINER_SHOW): cambiar un filtro lanza
 -- TRAINER_UPDATE, que lee sin tocarlos (así no se repite sin fin)
 local FILTERS = { "available", "unavailable", "used" }
+-- Una vez: fuera lo leído de un instructor con un nivel menor que el de los datos del
+-- juego. Son lecturas equivocadas de antes de ServiceRecipe(exact): un instructor de
+-- minería apuntaba Smelt Gold (155, su precio) como Transmute: Iron to Gold. Se
+-- vuelven a leer bien la próxima vez que abras el instructor de la profesión
+function Ledger:CleanTrainerFees()
+  local db = ES.db
+  if not db or db.trainerFeesChecked or type(db.trainerFees) ~= "table" then
+    if db then db.trainerFeesChecked = true end
+    return 0
+  end
+  db.trainerFeesChecked = true
+  local removed = 0
+  for id, seen in pairs(db.trainerFees) do
+    for _, p in ipairs(ES.PROFESSIONS or {}) do
+      local r = ES.Data[p.key] and ES.Data[p.key].recipes and ES.Data[p.key].recipes[id]
+      if r then
+        if type(seen) == "table" and seen.skill and r.train and seen.skill < r.train then
+          db.trainerFees[id] = nil
+          removed = removed + 1
+        end
+        break
+      end
+    end
+  end
+  return removed
+end
+
 function Ledger:ReadAllTrainerServices()
   if not (GetTrainerServiceTypeFilter and SetTrainerServiceTypeFilter) then return self:ReadTrainer() end
   local hidden = {}
@@ -173,7 +206,7 @@ function Ledger:ReadTrainer()
   for i = 1, GetNumTrainerServices() or 0 do
     local kind = GetTrainerServiceInfo and select(3, GetTrainerServiceInfo(i))
     if kind ~= "header" then
-      local id, r, key = ServiceRecipe(i, profs)
+      local id, r, key = ServiceRecipe(i, profs, prof == nil) -- (sin profesión conocida: solo por el hechizo)
       local cost = id and GetTrainerServiceCost(i)
       if cost then
         local skill = GetTrainerServiceSkillReq and select(2, GetTrainerServiceSkillReq(i))

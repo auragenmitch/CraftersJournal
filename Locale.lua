@@ -8,23 +8,36 @@ local _, ES = ...
 -- entonces, el del cliente. Cambiarlo recarga la interfaz: las tablas que se
 -- crean al cargar los archivos se traducen donde se usan (L[TABLA[k]]).
 
+-- `client`: el código de idioma del cliente (GetLocale) que corresponde a cada uno
 ES.LANGS = {
-  { key = "es", name = "Español" },
-  { key = "en", name = "English" },
+  { key = "es", name = "Español",  client = "esES" },
+  { key = "en", name = "English",  client = "enUS" },
+  { key = "de", name = "Deutsch",  client = "deDE" },
+  { key = "fr", name = "Français", client = "frFR" },
 }
 ES.Locales = {}
 
+local CLIENT_LANG = { esES = "es", esMX = "es", deDE = "de", frFR = "fr" }
 function ES.DefaultLanguage()
   local loc = GetLocale and GetLocale() or "esES"
-  return (loc == "esES" or loc == "esMX") and "es" or "en"
+  return CLIENT_LANG[loc] or "en"
 end
 
 ES.lang = ES.DefaultLanguage()
 
+-- Un texto sin traducir en alemán o francés sale en inglés, no en español (la clave):
+-- lo entiende más gente. En inglés, si falta, el español (lo que hubo siempre)
 ES.L = setmetatable({}, {
   __index = function(_, key)
     local t = ES.Locales[ES.lang]
-    return t and t[key] or key
+    local v = t and t[key]
+    if v then return v end
+    if ES.lang ~= "es" and ES.lang ~= "en" then
+      local en = ES.Locales.en
+      v = en and en[key]
+      if v then return v end
+    end
+    return key
   end,
 })
 
