@@ -1078,6 +1078,7 @@ end
 
 local function ShortestRoute(data, opts, ctx, weight, skip, fixed, paid)
   local recipes = GPSRecipes(data, opts, ctx)
+  local pins = opts.pinned -- (niveles con receta elegida: solo esa, aunque se esté probando sin ella)
   local INF = math.huge
   local prev = {}
   for i = 1, #recipes do prev[i] = INF end
@@ -1089,7 +1090,10 @@ local function ShortestRoute(data, opts, ctx, weight, skip, fixed, paid)
     for i, rc in ipairs(recipes) do
       ES.Yield()
       local c = INF
-      local allowed = not skip[rc.id] and (not (fixed and fixed[s]) or fixed[s] == rc.id)
+      local pin = pins and pins[s]
+      local allowed
+      if pin then allowed = pin == rc.id
+      else allowed = not skip[rc.id] and (not (fixed and fixed[s]) or fixed[s] == rc.id) end
       if allowed and rc.learn <= s and (prev[i] < INF or bestIdx or s == opts.from) then
         local pc = PointCost(ctx, rc, s)
         if pc then
@@ -1192,12 +1196,34 @@ local function OwnedContext(data, opts, via)
   return ctx
 end
 
+-- Niveles elegidos (opts.pinned) que de verdad se pueden subir con su receta: se
+-- aprende antes, aún da puntos, no la quitaste y sus materiales tienen precio. Los
+-- demás se quitan (si no, la ruta se pararía en ese nivel)
+function Planner.ValidPins(data, opts, ctx)
+  if not (opts.pinned and next(opts.pinned)) then return nil end
+  local ok = {}
+  for s, id in pairs(opts.pinned) do
+    local r = data.recipes[id]
+    local learn = r and Planner.LearnSkill(r, opts)
+    -- (y la herramienta que pida, si no la tienes: que se pueda conseguir)
+    local tool = r and r.tool and ES.Data.Tools and ES.Data.Tools[r.tool]
+    local toolOK = not tool or (ctx.toolMask[tool.family or "rod"] or 0) >= tool.mask
+      or Acquire(ctx, tool.item, 1, 0, {}, {}, {}) ~= nil
+    if learn and learn <= s and s >= opts.from and s < opts.to and Planner.Chance(r.t, s) > 0
+      and not (opts.excluded and opts.excluded[id]) and toolOK and RecipeCost(ctx, r, 1, {}) then
+      ok[s] = id
+    end
+  end
+  return next(ok) and ok or nil
+end
+
 function Planner.PlanGPS(data, opts)
   -- Lo que no cambia en todo el cálculo (escaleras de precios, quién fabrica qué),
   -- preparado una vez para los cientos de recorridos (ver NewContext)
   opts = Copy(opts)
   local CW = CraftWeight(opts)
   local tpl = NewContext(data, opts)
+  opts.pinned = Planner.ValidPins(data, opts, tpl)
   opts.shared = { prices = tpl.prices, to = opts.to, ladders = tpl.ladders, supply = tpl.supply,
     medians = tpl.medians, producers = tpl.producers }
   local Score = Planner.RouteScore
@@ -1664,6 +1690,15 @@ function Planner:Plan(data, opts)
   -- (ruta fijada, las que recorre el GPS) y el planificador antiguo, que solo se usa
   -- para compararlo en tools/route_qa.py (Planner.USE_GPS = false)
   if Planner.USE_GPS and not opts.forced then return Planner.PlanGPS(data, opts) end
+  -- Niveles que se suben con una receta elegida (opts.pinned: equipo imprescindible,
+  -- GearPicks.lua): mandan sobre lo forzado en esos niveles
+  if opts.pinned and not opts.pinsMerged then
+    local f = {}
+    for s, id in pairs(opts.forced or {}) do f[s] = id end
+    for s, id in pairs(opts.pinned) do f[s] = id end
+    opts = Copy(opts)
+    opts.forced, opts.pinsMerged = f, true
+  end
 
   -- Materiales que se pueden fabricar (Light Leather de Ruined Leather Scraps): o se
   -- fabrican todos o se compran todos, nunca las dos cosas (ver Acquire). La primera

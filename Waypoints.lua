@@ -215,9 +215,10 @@ function WP.Quest(questID)
   local q = false
   local baked = ES.Data.Quests and ES.Data.Quests[questID]
   if baked then
-    -- (asks: el texto de lo que pide entregar; chain: misiones antes en su cadena)
+    -- (asks: el texto de lo que pide entregar; chain: misiones antes en su cadena;
+    -- items: lo que pide entregar, { { objeto, cantidad[, nombre] } }, ver WP.TurnInCost)
     q = { id = questID, name = baked[1], side = baked[2], level = baked[3] or 0, starters = baked[4] or {},
-      asks = baked[5], chain = baked[6] or 0 }
+      asks = baked[5], chain = baked[6] or 0, items = baked[7] }
     quests[questID] = q
     return q
   end
@@ -336,6 +337,86 @@ function WP.Usable(npcIDs)
 end
 
 ---------------------------------------------------------------------------
+-- Lo que cuesta lo que pide entregar una misión (CurseForge: Wild Leather Leggings
+-- pide 2 Turtle Scale Helms, 2 Turtle Scale Bracers y 2 Wildvines; la ruta la
+-- contaba gratis). Cada objeto, a lo más barato de: vendedor, AH (el mínimo del
+-- escaneo) o fabricarlo con una receta de la misma profesión que no sea de pergamino
+-- (sus materiales a vendedor o AH, hasta 3 niveles). Lo que no tiene precio (botín de
+-- misión, o nada en la AH) no suma: se dice que hay que conseguirlo ("farm").
+--   { cost, lines = { { itemID, name, count, unit, how = "vendor"|"ah"|"craft"|nil } },
+--     farm = número de objetos sin precio } o nil si la misión no pide objetos
+---------------------------------------------------------------------------
+local producers -- [itemID] = { { profKey, receta } } (recetas que no son de pergamino)
+local function Producers(itemID)
+  if not producers then
+    producers = {}
+    for _, p in ipairs(ES.PROFESSIONS or {}) do
+      for _, r in pairs(ES.Data[p.key] and ES.Data[p.key].recipes or {}) do
+        if r.out and not r.scroll and not r.favor and not r.gone and not r.spec then
+          local list = producers[r.out[1]] or {}
+          list[#list + 1] = { prof = p.key, r = r }
+          producers[r.out[1]] = list
+        end
+      end
+    end
+  end
+  return producers[itemID]
+end
+
+local function UnitCost(itemID, prices, profKey, depth, seen)
+  local best, how
+  local vendor = ES.Data.VendorPrices and ES.Data.VendorPrices[itemID]
+  if vendor then best, how = vendor, "vendor" end
+  local ah = prices and prices[itemID]
+  if ah and ah.minUnit and (not best or ah.minUnit < best) then best, how = ah.minUnit, "ah" end
+  if depth < 3 and not seen[itemID] then
+    seen[itemID] = true
+    for _, pr in ipairs(Producers(itemID) or {}) do
+      if pr.prof == profKey then
+        local total = 0
+        for _, rq in ipairs(pr.r.r) do
+          local c = UnitCost(rq[1], prices, profKey, depth + 1, seen)
+          if not c then total = nil break end
+          total = total + c * rq[2]
+        end
+        if total then
+          total = total / (pr.r.out[2] or 1)
+          if not best or total < best then best, how = total, "craft" end
+        end
+      end
+    end
+    seen[itemID] = nil
+  end
+  return best, how
+end
+
+function WP.TurnInCost(quest, prices, profKey)
+  if not (quest and quest.items and quest.items[1]) then return nil end
+  local res = { cost = 0, lines = {}, farm = 0 }
+  for _, it in ipairs(quest.items) do
+    local id, n = it[1], it[2]
+    local unit, how
+    if id and id > 0 then unit, how = UnitCost(id, prices, profKey, 0, {}) end
+    res.lines[#res.lines + 1] = { itemID = id > 0 and id or nil, name = it[3], count = n, unit = unit, how = how }
+    if unit then res.cost = res.cost + unit * n else res.farm = res.farm + 1 end
+  end
+  res.cost = math.floor(res.cost + 0.5)
+  return res
+end
+
+-- Profesión de una receta (para fabricar lo que pide su misión con la misma)
+local recipeProf
+function WP.RecipeProfession(recipe)
+  if not recipeProf then
+    recipeProf = {}
+    for _, p in ipairs(ES.PROFESSIONS or {}) do
+      for _, r in pairs(ES.Data[p.key] and ES.Data[p.key].recipes or {}) do recipeProf[r] = p.key end
+    end
+  end
+  return recipeProf[recipe]
+end
+
+---------------------------------------------------------------------------
 -- De dónde sale una receta de pergamino (prueba piloto: Cocina)
 ---------------------------------------------------------------------------
 -- Profesiones en las que las recetas de pergamino se buscan por sus fuentes reales
@@ -348,7 +429,7 @@ WP.SOURCED_PROFESSIONS = {
 local sourceCache, sourceKey = {}, nil
 
 -- Fuentes de la receta para tu personaje y la mejor (la más barata):
---   quest  = misión de tu bando que la da (gratis)
+--   quest  = misión de tu bando que la da (lo que cuesta lo que pide entregar, WP.TurnInCost)
 --   vendor = la vende un PNJ de tu bando (su precio)
 --   ah     = la más barata anunciada ahora en la AH
 -- `prices` es la tabla de precios del escaneo (ctx.prices). Sin ninguna fuente, best = nil.
@@ -374,7 +455,17 @@ function WP.RecipeSource(recipe, prices, noQuests, noLimited)
   end
   local ah = prices and prices[recipe.scroll]
   if src.quests[1] and not noQuests then
-    src.options[#src.options + 1] = { kind = "quest", cost = 0, quest = src.quests[1] }
+    -- De las misiones que la dan, la que menos pide
+    -- (src.turnIns[misión] = lo que pide y cuánto cuesta, para el tooltip)
+    local pick, pickCost
+    src.turnIns = {}
+    for _, q in ipairs(src.quests) do
+      local turnIn = WP.TurnInCost(q, prices, WP.RecipeProfession(recipe))
+      src.turnIns[q.id] = turnIn
+      local c = turnIn and turnIn.cost or 0
+      if not pick or c < pickCost then pick, pickCost = q, c end
+    end
+    src.options[#src.options + 1] = { kind = "quest", cost = pickCost, quest = pick, turnIn = src.turnIns[pick.id] }
   end
   local item = ES.Data.ItemSources and ES.Data.ItemSources[recipe.scroll]
   src.limited = item and item.lim and src.vendors[1] ~= nil or nil

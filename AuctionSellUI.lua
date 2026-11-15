@@ -3,8 +3,9 @@ local L = ES.L
 
 -- Al abrir la Casa de Subastas sale al lado una ventana (como la del vendedor,
 -- VendorUI.lua) con lo que la pestaña Inventario dice que vendas en la AH: cuántos,
--- a cuánto y lo que te queda tras la comisión. Clic en una fila: anuncia todas las
--- de la fila; Mayús+clic, solo una (un anuncio por clic: la AH pide un clic del
+-- a cuánto y lo que te queda tras la comisión. Solo si la activas en las opciones
+-- (ES:AuctionSellWindowOn; por defecto no). Dos clics en una fila: anuncia todas las
+-- de la fila; Mayús, solo una (un anuncio por clic: la AH pide un clic del
 -- jugador para cada uno). Clic derecho: no venderlo nunca. Va pegada a la AH, y la
 -- lista de compra pequeña, si sale, a su derecha. Con la ventana grande al lado de la AH no sale (ya tienes el
 -- Inventario ahí).
@@ -50,6 +51,13 @@ local function RowClick(self, button)
   -- es prudente: lo dudoso, pocas y a 8 h), como en la pestaña Inventario.
   -- Mayús+clic: una sola, para probar el precio (como Mayús en las bolsas: una parte)
   local n = (IsShiftKeyDown and IsShiftKeyDown()) and 1 or e.ahN
+  -- Dos clics: el primero prepara la fila y dice qué se va a anunciar; el segundo
+  -- anuncia (un clic sin querer ya no anuncia nada, ver Ledger:ArmPost)
+  if ES.Ledger:PostPriceState() ~= "scanning" and not ES.Ledger:ArmPost(e.itemID, n, e.listPrice) then
+    Sell:Refresh() -- (la fila dice "Vuelve a pulsar"; pasado el plazo vuelve a lo de siempre)
+    C_Timer.After(ES.Ledger.ARM_SECONDS + 0.1, function() Sell:Refresh() end)
+    return
+  end
   ES.Ledger:PostOnAH(e.itemID, n, e.listPrice, e.hours)
   C_Timer.After(0.6, function() Sell:Refresh() end)
 end
@@ -65,9 +73,13 @@ local function RowEnter(self)
     GameTooltip:Show()
     return
   end
-  GameTooltip:AddLine(string.format(L["Clic: anunciar %d."], self.entry.ahN), 0.5, 0.8, 1)
-  if self.entry.ahN > 1 then
-    GameTooltip:AddLine(L["Mayús+clic: anunciar solo 1."], 0.5, 0.8, 1)
+  if ES.Ledger:IsArmed(self.entry.itemID) then
+    GameTooltip:AddLine(L["Vuelve a pulsar para anunciarlo."], 1, 0.6, 0.2)
+  else
+    GameTooltip:AddLine(string.format(L["Dos clics: anunciar %d."], self.entry.ahN), 0.5, 0.8, 1)
+    if self.entry.ahN > 1 then
+      GameTooltip:AddLine(L["Mayús + dos clics: anunciar solo 1."], 0.5, 0.8, 1)
+    end
   end
   GameTooltip:AddLine(L["Clic derecho: no venderlo nunca."], 0.6, 0.6, 0.6)
   GameTooltip:Show()
@@ -155,7 +167,7 @@ function Sell:Refresh()
   self:HookPanels()
   local ah = AHFrame()
   local main = CraftersJournalMainFrame
-  if not (ah and ES:IsAuctionHouseOpen()) or self.closed or (main and main:IsShown()) or not ES:AuctionWindowsOn() then
+  if not (ah and ES:IsAuctionHouseOpen()) or self.closed or (main and main:IsShown()) or not ES:AuctionSellWindowOn() then
     if panel then panel:Hide() end
     PlaceShopping()
     return
@@ -186,8 +198,12 @@ function Sell:Refresh()
     row.name:SetText((ES.UI.ItemLabel(e.itemID, "#" .. e.itemID)))
     -- Cuántos y a cuánto se anuncian, la duración y lo que dicen las alertas
     local verdict = ES.Market.LABELS and ES.Market.LABELS[e.verdict]
-    row.qty:SetText(string.format(L["Anuncias %d × %s · %d h"], e.ahN, ES.Money(e.listPrice), e.hours or 24)
-      .. (verdict and (" · " .. verdict) or ""))
+    if ES.Ledger:IsArmed(e.itemID) then
+      row.qty:SetText("|cffff9933" .. L["Vuelve a pulsar para anunciarlo"] .. "|r")
+    else
+      row.qty:SetText(string.format(L["Anuncias %d × %s · %d h"], e.ahN, ES.Money(e.listPrice), e.hours or 24)
+        .. (verdict and (" · " .. verdict) or ""))
+    end
     row.cost:SetText(GREEN .. "+" .. ES.Money(e.ahN * (e.ahUnit or 0)) .. "|r")
     row:Show()
   end
@@ -202,8 +218,8 @@ function Sell:Refresh()
   -- Una línea por acción, la tecla en el azul de las acciones del addon (antes era una
   -- sola línea gris que se partía y no se leía)
   local KEY = "|cff80ccff"
-  local hint = KEY .. L["Clic"] .. "|r  " .. L["anunciar todas"] .. "\n"
-    .. KEY .. L["Mayús+clic"] .. "|r  " .. L["anunciar solo 1"] .. "\n"
+  local hint = KEY .. L["Dos clics"] .. "|r  " .. L["anunciar todas"] .. "\n"
+    .. KEY .. L["Mayús + dos clics"] .. "|r  " .. L["anunciar solo 1"] .. "\n"
     .. KEY .. L["Clic derecho"] .. "|r  " .. L["no venderlo nunca"]
   if #list > shown then
     hint = hint .. "\n" .. GREY .. string.format(L["(%d más en la pestaña Inventario)"], #list - shown) .. "|r"

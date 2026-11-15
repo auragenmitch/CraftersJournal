@@ -242,7 +242,7 @@ function ES:PlanOptions(profKey, from, to, cap)
     via = via or {}
     via[itemID] = "buy"
   end
-  return {
+  local o = {
     via = via,
     -- La última ruta calculada de esta profesión: el GPS la prueba primero (ver PlanGPS)
     hint = self.lastRoutes[profKey],
@@ -265,6 +265,9 @@ function ES:PlanOptions(profKey, from, to, cap)
     -- cobre; encendido: cada fabricación pesa FEWER_CRAFTS_WEIGHT)
     craftWeight = settings.fewerCrafts and self.Planner.FEWER_CRAFTS_WEIGHT or nil,
   }
+  -- Equipo imprescindible para tu clase (GearPicks.lua): niveles que se suben fabricándolo
+  if self.Gear then o.pinned = self.Gear:Pins(profKey, o) end
+  return o
 end
 
 -- Recetas quitadas de la ruta y materiales que no quieres fabricar, en orden fijo
@@ -330,6 +333,7 @@ function ES:LockedPlan(profKey)
   if plan and plan.lockStarted == lock.started and plan.lockPrices == lock.scanTime then return plan end
   local opts = self:PlanOptions(profKey, lock.from, lock.to, lock.cap)
   opts.owned, opts.forced, opts.excluded, opts.via, opts.fullInfo = lock.owned, lock.choice, nil, lock.via, true
+  opts.pinned = nil -- (lo elegido ya va en las recetas de la ruta empezada)
   opts.prices, opts.pricesTime = lock.prices, lock.scanTime
   plan = self.Planner:Plan(ES.Data[profKey], opts)
   plan.lockStarted, plan.lockPrices = lock.started, lock.scanTime
@@ -344,6 +348,7 @@ function ES:RefreshRoutePrices(profKey)
   if not lock then return end
   local opts = self:PlanOptions(profKey, lock.from, lock.to, lock.cap)
   opts.owned, opts.forced, opts.excluded, opts.via, opts.fullInfo = lock.owned, lock.choice, nil, lock.via, true
+  opts.pinned = nil -- (lo elegido ya va en las recetas de la ruta empezada)
   local plan = self.Planner:Plan(ES.Data[profKey], opts) -- con el último escaneo
   lock.prices, lock.scanTime = RoutePrices(plan)
   plan.lockStarted, plan.lockPrices = lock.started, lock.scanTime
@@ -422,7 +427,7 @@ function ES:PlanKey(profKey, from, to, cap)
   return table.concat({ profKey, self.planGen .. "." .. (self.planGens[profKey] or 0), scan and scan.time or 0, from, to, tostring(cap), tostring(settings.useBags),
     tostring(settings.useQuests), self:RealmKey(), ExcludedKey(settings), tostring(settings.useFavor),
     tostring(settings.fewerCrafts), tostring(self.Planner.SKILL_BONUS or 0), -- (Working Overtime)
-    tostring(settings.noLimited or false) }, ":")
+    tostring(settings.noLimited or false), self.Gear and self.Gear:Key(profKey) or "" }, ":")
 end
 
 -- La ruta ya calculada (fijada, o en la caché y aún válida), sin calcular nada
@@ -1421,22 +1426,23 @@ function ES:CreateProfessionPage(page, profKey)
 
   -- Filtros: iconos que se tachan al desactivarlos y recalculan al pulsarlos.
   -- isOn() lee el ajuste; toggle() lo cambia; lines() da el texto del tooltip
-  local function FilterIcon(anchor, texture, title, isOn, toggle, lines)
+  -- onRight: clic derecho (el de equipo imprescindible abre su ventana para elegir piezas)
+  local function FilterIcon(anchor, texture, title, isOn, toggle, lines, onRight)
     local b = CreateFrame("Button", nil, head, "BackdropTemplate")
-    -- (24 px y 3 de separación: con 26 y 4 el quinto icono, el de vendedores de stock
-    -- limitado, empujaba el primero encima de la casilla del objetivo)
-    b:SetSize(24, 24)
+    -- (20 px y 2 de separación: con 24 y 3 cabían cinco; el sexto, el de equipo
+    -- imprescindible, empujaba el primero encima de la casilla del objetivo)
+    b:SetSize(20, 20)
     -- Centrados en vertical con los botones de vista (Ruta, Materiales, Profit)
-    b:SetPoint("RIGHT", anchor, "LEFT", anchor == prev and -8 or -3, 0)
-    b:SetBackdrop({ edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10 })
+    b:SetPoint("RIGHT", anchor, "LEFT", anchor == prev and -8 or -2, 0)
+    b:SetBackdrop({ edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 8 })
     b.icon = b:CreateTexture(nil, "ARTWORK")
-    b.icon:SetPoint("TOPLEFT", 3, -3)
-    b.icon:SetPoint("BOTTOMRIGHT", -3, 3)
+    b.icon:SetPoint("TOPLEFT", 2, -2)
+    b.icon:SetPoint("BOTTOMRIGHT", -2, 2)
     if texture == ES.QUEST_ICON then ES.SetQuestIcon(b.icon) else b.icon:SetTexture(texture) end
     if texture:find("Icons") then b.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93) end
     b.cross = b:CreateTexture(nil, "OVERLAY")
-    b.cross:SetPoint("TOPLEFT", 4, -4)
-    b.cross:SetPoint("BOTTOMRIGHT", -4, 4)
+    b.cross:SetPoint("TOPLEFT", 3, -3)
+    b.cross:SetPoint("BOTTOMRIGHT", -3, 3)
     b.cross:SetTexture("Interface\\Buttons\\UI-GroupLoot-Pass-Up")
     local hl = b:CreateTexture(nil, "HIGHLIGHT")
     hl:SetAllPoints(b.icon)
@@ -1448,7 +1454,9 @@ function ES:CreateProfessionPage(page, profKey)
       self.cross:SetShown(not on)
       self:SetBackdropBorderColor(on and 1 or 0.4, on and 0.82 or 0.4, on and 0.25 or 0.4, 1)
     end
-    b:SetScript("OnClick", function(self)
+    if onRight then b:RegisterForClicks("LeftButtonUp", "RightButtonUp") end
+    b:SetScript("OnClick", function(self, button)
+      if button == "RightButton" and onRight then onRight(self) return end
       toggle()
       self:Refresh()
       ES:StopRoute(profKey) -- otra opción es otra ruta: decisión tuya (comprar o fabricar no la libera)
@@ -1460,6 +1468,7 @@ function ES:CreateProfessionPage(page, profKey)
       GameTooltip:AddLine(title)
       for i, l in ipairs(lines()) do GameTooltip:AddLine(l, i == 1 and 1 or 0.7, i == 1 and 1 or 0.7, i == 1 and 1 or 0.7, true) end
       GameTooltip:AddLine(L["Pulsa para cambiarlo."], 0.5, 0.8, 1)
+      if onRight then GameTooltip:AddLine(L["Clic derecho: elegir las piezas y tu especialización."], 0.5, 0.8, 1) end
       if ES:RouteLock(profKey) then
         GameTooltip:AddLine(L["Con la ruta empezada, cambiarlo calcula una ruta nueva."], 1, 0.6, 0.2, true)
       end
@@ -1514,8 +1523,37 @@ function ES:CreateProfessionPage(page, profKey)
         or L["La ruta no usa recetas de Merchant's Favor."] }
     end)
 
+  -- Equipo imprescindible para tu clase y especialización (GearPicks.lua): por defecto sí.
+  -- Clic derecho: la ventana para elegir piezas, cuántas y la especialización (GearUI.lua)
+  page.gearButton = FilterIcon(page.favorButton, "Interface\\Icons\\INV_Chest_Chain_05",
+    L["Equipo imprescindible"],
+    function() return ES.Gear:On(profKey) end,
+    function()
+      local st = ES.db.prof[profKey] -- (el de ahora: GearPicks lo lee de ahí)
+      st.gearOff = not st.gearOff or nil
+      ES.Gear:Changed()
+    end,
+    function()
+      local spec = ES.Gear:Spec()
+      local picks = ES.Gear:Picks(profKey)
+      local out = { ES.Gear:On(profKey)
+        and L["La ruta incluye fabricar las piezas azules de esta profesión que le sirven a tu personaje mientras subes de nivel (y las que añadas tú), en el nivel en que dan puntos."]
+        or L["La ruta no tiene en cuenta el equipo para tu personaje."] }
+      if spec then
+        out[#out + 1] = string.format(L["Para: %s (%s)%s"], UnitClass and UnitClass("player") or "?", spec.name,
+          spec.auto and L[" · según tus talentos"] or "")
+      end
+      for i, p in ipairs(picks) do
+        if i > 6 then out[#out + 1] = string.format(L["y %d más"], #picks - 6) break end
+        out[#out + 1] = string.format("  %d× %s", p.qty, ES:DataItemName(p.e.item) or p.e.r.name)
+      end
+      if #picks == 0 then out[#out + 1] = L["Ninguna pieza azul de esta profesión le sirve ahora a tu personaje."] end
+      return out
+    end,
+    function(self) ES:ToggleGearPanel(page, self) end)
+
   -- Menos fabricaciones: pagar algo más por no fabricar decenas de veces una receta en verde
-  page.fewerButton = FilterIcon(page.favorButton, "Interface\\Icons\\INV_Misc_PocketWatch_01",
+  page.fewerButton = FilterIcon(page.gearButton, "Interface\\Icons\\INV_Misc_PocketWatch_01",
     L["Menos fabricaciones"],
     function() return settings.fewerCrafts and true or false end,
     function() settings.fewerCrafts = not settings.fewerCrafts or nil end,
@@ -1964,12 +2002,20 @@ local function SourcedLearnLine(r, st, profName, plan)
     useItem = r.scroll -- clic: usa el pergamino (botón seguro, ver SetUseItem)
   elseif best.kind == "quest" then
     icon, label = QUEST_ICON, L["Da la misión"]
-    -- Gratis en oro, pero puede pedir objetos o misiones antes (CurseForge): se dice
-    -- aquí y el texto exacto va en el tooltip; la ruta no les pone precio (casi todo
-    -- es botín de criaturas). Si no compensa, la X de la fila
+    -- Puede pedir objetos o misiones antes (CurseForge): lo que pide entregar se cuenta
+    -- a lo más barato (vendedor, AH o fabricarlo; WP.TurnInCost) y va en el valor de
+    -- la fila; lo que no tiene precio (botín) se dice. Si no compensa, la X de la fila
     local q = best.quest
-    local cost = (q.asks and L[" · pide objetos"] or "")
-      .. ((q.chain or 0) > 0 and string.format(L[" · cadena de %d misiones"], q.chain + 1) or "")
+    local turnIn = best.turnIn
+    local asks = ""
+    if turnIn and turnIn.farm > 0 then
+      asks = L[" · pide objetos que hay que conseguir"]
+    elseif turnIn then
+      asks = L[" · pide objetos"]
+    elseif q.asks then
+      asks = L[" · pide objetos"]
+    end
+    local cost = asks .. ((q.chain or 0) > 0 and string.format(L[" · cadena de %d misiones"], q.chain + 1) or "")
     sub = L["Misión: "] .. q.name .. (cost ~= "" and (ORANGE .. cost .. "|r" .. skipHint) or also)
     pick = function() return WP.Nearest(best.quest.starters) end
   elseif best.kind == "vendor" then
@@ -1998,22 +2044,41 @@ local function SourcedLearnLine(r, st, profName, plan)
         GameTooltip:AddDoubleLine(ES.Market.ICON_BAD .. L["Misión"], q.name .. L[" · desactivada"], 0.6, 0.6, 0.6, 0.6, 0.6, 0.6)
       else
         -- ("gratis" solo si no pide nada: si pide objetos, cuesta lo que cueste conseguirlos)
-        GameTooltip:AddDoubleLine(Mark("quest") .. L["Misión"], q.name .. ((q.asks or (q.chain or 0) > 0) and "" or L[" · gratis"]),
+        GameTooltip:AddDoubleLine(Mark("quest") .. L["Misión"], q.name .. ((q.asks or q.items or (q.chain or 0) > 0) and "" or L[" · gratis"]),
           1, 0.82, 0, 1, 1, 1)
       end
       local starter = WP.Nearest(q.starters)
       local npc = starter and WP.NPC(starter)
       if npc then GameTooltip:AddDoubleLine(" ", npc.name .. " · " .. WP.LocationText(npc), 1, 1, 1, 0.6, 0.6, 0.6) end
       if q.level > 0 then GameTooltip:AddDoubleLine(" ", L["nivel "] .. q.level, 1, 1, 1, 0.6, 0.6, 0.6) end
-      -- Lo que pide entregar, con el texto de la misión (en inglés: es el del juego)
-      if q.asks then
+      -- Lo que pide entregar: cada objeto con su precio y de dónde (vendedor, AH o
+      -- fabricarlo), o "consíguelo" si no tiene precio. Sin desglose, el texto de la
+      -- misión (en inglés: es el del juego)
+      local turnIn = src.turnIns and src.turnIns[q.id]
+      if turnIn then
+        GameTooltip:AddDoubleLine(L["Pide entregar"], ES.Money(turnIn.cost), 1, 0.82, 0, 1, 1, 1)
+        local HOW = { vendor = L["vendedor"], ah = L["AH"], craft = L["fabricándolo"] }
+        for _, line in ipairs(turnIn.lines) do
+          local name = line.itemID and (ES:DataItemName(line.itemID) or line.name) or line.name or "?"
+          if line.unit then
+            GameTooltip:AddDoubleLine(string.format("  %d× %s", line.count, name),
+              string.format("%s · %s", ES.Money(math.floor(line.unit * line.count + 0.5)), HOW[line.how] or ""), 0.9, 0.9, 0.9, 0.8, 0.8, 0.8)
+          else
+            GameTooltip:AddDoubleLine(string.format("  %d× %s", line.count, name), L["sin precio: consíguelo"], 0.9, 0.9, 0.9, 1, 0.6, 0.2)
+          end
+        end
+      elseif q.asks then
         GameTooltip:AddLine(L["Pide: "] .. q.asks, 1, 0.6, 0.2, true)
       end
       if (q.chain or 0) > 0 then
         GameTooltip:AddLine(q.chain == 1 and L["Antes hay que hacer 1 misión de su cadena, que también puede pedir objetos."]
           or string.format(L["Antes hay que hacer %d misiones de su cadena, que también pueden pedir objetos."], q.chain), 1, 0.6, 0.2, true)
       end
-      if q.asks or (q.chain or 0) > 0 then
+      if turnIn then
+        GameTooltip:AddLine(turnIn.farm > 0
+          and L["La ruta cuenta lo que pide a lo más barato (vendedor, AH o fabricarlo); lo que no tiene precio no suma: tendrás que conseguirlo. No va a la lista de compra. Si no te compensa, quítala con la X de la fila."]
+          or L["La ruta cuenta lo que pide a lo más barato (vendedor, AH o fabricarlo). No va a la lista de compra. Si no te compensa, quítala con la X de la fila."], 0.6, 0.6, 0.6, true)
+      elseif q.asks or (q.chain or 0) > 0 then
         GameTooltip:AddLine(L["La ruta no le pone precio a lo que pide (casi todo se consigue matando criaturas). Si no te compensa, quítala con la X de la fila."], 0.6, 0.6, 0.6, true)
       end
     end
@@ -2109,6 +2174,16 @@ local function BagsLine(alt, locked)
     alt = alt, -- (para pruebas)
   }
 end
+
+-- Equipo imprescindible (GearPicks.lua): la estrella de las marcas de banda y el azul de lo raro
+local GEAR_MARK = "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_1:12|t "
+local BLUE = "|cff4da6ff"
+local GEAR_WHY = ES.Localize({
+  grey = "Ya no da puntos desde tu nivel: fabrícala cuando quieras (no va en la ruta)",
+  above = "Por encima de tu objetivo: sube el objetivo para incluirla",
+  nolearn = "Ahora no puedes conseguir su receta (botín, reputación o no está en la AH)",
+  dropped = "Algún material no tiene precio: escanea la AH para incluirla",
+})
 
 local function RouteLines(plan, page)
   local lines = {}
@@ -2475,6 +2550,21 @@ local function RouteLines(plan, page)
         GameTooltip:Show()
       end,
     }
+    -- Equipo imprescindible: este paso fabrica una pieza para ti (GearPicks.lua)
+    local keep = not done and ES.Gear and ES.Gear:PickQty(page.profKey, st.id) or 0
+    if keep > 0 then
+      local line = lines[#lines]
+      line.sub = GEAR_MARK .. BLUE .. string.format(L["Imprescindible: guarda %d para ti"], keep) .. "|r · " .. line.sub
+      line.gearKeep = keep
+      local tip = line.tooltip
+      line.tooltip = function(row)
+        tip(row)
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine(string.format(L["Equipo imprescindible: guarda %d para tu personaje (no lo vendas). Se cambia con clic derecho en el icono de equipo, arriba de la ruta."], keep),
+          0.4, 0.7, 1, true)
+        GameTooltip:Show()
+      end
+    end
     -- Lo que se fabrica más tarde dentro de este paso (la pólvora a 40), en su sitio:
     -- tras el paso y tras lo que pase antes de ese nivel (entrenar un rango a 30...)
     table.sort(afterStep, function(a, b) return tonumber(a.level) < tonumber(b.level) end)
@@ -2484,6 +2574,35 @@ local function RouteLines(plan, page)
     end
   end
   while events[ev] do AddEvent(events[ev]) ev = ev + 1 end
+  -- Equipo imprescindible que la ruta no fabrica: ya no da puntos desde tu nivel, está
+  -- por encima de tu objetivo, no se puede conseguir la receta o le falta un precio.
+  -- Se dice por qué, sin coste (no va en la ruta)
+  local gearOut = {}
+  for _, g in ipairs(ES.Gear and ES.Gear:Status(page.profKey, plan) or {}) do
+    if g.status ~= "route" then gearOut[#gearOut + 1] = g end
+  end
+  if #gearOut > 0 then
+    lines[#lines + 1] = { section = GEAR_MARK .. L["Equipo imprescindible fuera de la ruta"] }
+    for _, g in ipairs(gearOut) do
+      local e = g.pick.e
+      local name, texture = ItemLabel(e.item, e.r.name)
+      local why = GEAR_WHY[g.status] or ""
+      local id = g.pick.id
+      lines[#lines + 1] = {
+        level = tostring(e.r.train or e.r.t[1]),
+        icon = texture or 134400,
+        title = string.format("%d× %s", g.pick.qty, name),
+        sub = GREY .. why .. "|r",
+        value = "", item = e.item,
+        onClick = function() ES:OpenRecipe(id) end,
+        tooltip = function(row)
+          SimpleTooltip(e.item, why)(row)
+          GameTooltip:AddLine(L["Clic derecho en el icono de equipo, arriba de la ruta: cambiar las piezas."], 0.5, 0.8, 1, true)
+          GameTooltip:Show()
+        end,
+      }
+    end
+  end
   if plan.stoppedAt then
     lines[#lines + 1] = { title = ORANGE .. L["El plan se queda en "] .. plan.stoppedAt .. "|r", sub = StopReason(plan) }
   end
@@ -2565,7 +2684,11 @@ local function SaleAction(d, advice, page)
   elseif ES:IsAuctionHouseOpen() and toAH > 0 then
     -- Las que diga la ruta, como mucho las que llevas; a platas enteras (la AH de Forever)
     local price = Ledger.PostPrice(advice.price)
-    return function() Ledger:PostOnAH(d.itemID, toAH, price) C_Timer.After(0.5, Done) end, nil,
+    -- (dos clics: el primero solo dice qué va a anunciar, ver Ledger:ArmPost)
+    return function()
+      if Ledger:PostPriceState() ~= "scanning" and not Ledger:ArmPost(d.itemID, toAH, price) then return end
+      Ledger:PostOnAH(d.itemID, toAH, price) C_Timer.After(0.5, Done)
+    end, nil,
       string.format(L["Anunciar %d en la AH a %s"], toAH, ES.Money(price))
   elseif ES:IsAuctionHouseOpen() and advice.ah > 0 then
     -- AH abierta pero no llevas ninguno encima (en el banco o aún sin fabricar): el
@@ -2592,6 +2715,16 @@ local function ProfitLines(plan, page)
     local signals = d.sale.ahNet and d.sell > 0 and ES.Market:Signals(d.itemID)
     local advice = ES.Planner.SaleAdvice(d)
     d.advice = advice
+    -- Equipo imprescindible: las que guardas para ti no se proponen vender
+    local mine = ES.Gear and ES.Gear:KeepItem(page.profKey, d.itemID) or 0
+    if mine > 0 then
+      local left = mine
+      for _, k in ipairs({ "unsold", "vendor", "ah" }) do
+        local take = math.min(left, advice[k] or 0)
+        advice[k], left = (advice[k] or 0) - take, left - take
+      end
+      parts[#parts + 1] = GEAR_MARK .. BLUE .. string.format(L["Imprescindible: guarda %d para ti"], mine) .. "|r"
+    end
     if advice.ah > 0 then
       parts[#parts + 1] = string.format(L["%spon %d en la AH a %s|r (%s)"], GOLD, advice.ah,
         ES.Money(ES.Ledger and ES.Ledger.PostPrice(advice.price) or advice.price), -- platas enteras, como se anuncia
@@ -2888,7 +3021,7 @@ function ES:CheckBetterRoute(page)
     local best = self.Planner:Plan(data, self:PlanOptions(profKey, from, lock.to, cap))
     -- La tuya desde tu nivel, con lo que llevas ahora (misma vara)
     local opts = self:PlanOptions(profKey, from, lock.to, cap)
-    opts.forced, opts.via = lock.choice, lock.via
+    opts.forced, opts.via, opts.pinned = lock.choice, lock.via, nil
     local mine = self.Planner:Plan(data, opts)
     return CompareRoutes(lock, best, mine)
   end, function(result)
@@ -2930,7 +3063,7 @@ function ES:CheckRouteDrift(profKey, onDone, owner)
     local data = ES.Data[profKey]
     local function Mine(old)
       local opts = self:PlanOptions(profKey, from, lock.to, cap)
-      opts.forced, opts.via = lock.choice, lock.via
+      opts.forced, opts.via, opts.pinned = lock.choice, lock.via, nil
       if old then opts.prices, opts.pricesTime = lock.prices, lock.scanTime end
       return self.Planner:Plan(data, opts)
     end
@@ -3025,6 +3158,8 @@ end
 
 function ES:RenderPlan(page)
   local plan = page.plan
+  -- (la ventana del equipo imprescindible dice qué piezas van en la ruta)
+  if self.RefreshGearPanel then self:RefreshGearPanel() end
 
   -- Calculando la primera ruta: nada que enseñar aún
   local stats = page.stats

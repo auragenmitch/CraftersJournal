@@ -617,7 +617,8 @@ function ES:UpdateLastScan()
     -- El último intento no acabó: que "hace 2 días" no parezca un escaneo perdido
     main.lastScan:SetText("|cffff9933" .. L["Cancelado · último: "] .. (scan and TimeAgo(scan.time) or L["nunca"]) .. "|r")
   else
-    main.lastScan:SetText(scan and (L["Último escaneo: "] .. TimeAgo(scan.time)) or L["Sin escanear"])
+    main.lastScan:SetText(scan and (L["Último escaneo: "] .. TimeAgo(scan.time)
+      .. (scan.source == "auctionator" and L[" (Auctionator)"] or "")) or L["Sin escanear"])
   end
 end
 

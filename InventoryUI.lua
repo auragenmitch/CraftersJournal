@@ -128,15 +128,66 @@ function Inventory.IsGear(itemID, bound)
   return not craftedItems[itemID]
 end
 
+-- Lo que llevas para usarlo, no para venderlo (CurseForge: "consumibles, órdenes y
+-- quién sabe qué más" anunciados con un clic sin querer). Por clase de objeto
+-- (GetItemInfoInstant): consumibles, misiones, componentes de clase, munición, carcajes,
+-- llaves y "varios" (órdenes, fichas). Salvo lo gris (basura de vendedor) y los
+-- consumibles que fabricas tú (sabes la receta: pociones de tu alquimia, comida de tu
+-- cocina). Con la opción ES.db.sellAnyKind (Options.lua) se propone todo, como antes.
+local KEEP_CLASSES = { [0] = "consumable", [5] = "consumable", [6] = "consumable", [11] = "consumable",
+  [12] = "quest", [13] = "quest", [15] = "misc" }
+local madeBy -- [itemID] = { recetas que lo fabrican }
+local function MadeByYou(itemID)
+  if not madeBy then
+    madeBy = {}
+    for _, p in ipairs(ES.PROFESSIONS) do
+      for id, r in pairs(ES.Data[p.key] and ES.Data[p.key].recipes or {}) do
+        if r.out then
+          local list = madeBy[r.out[1]] or {}
+          list[#list + 1] = id
+          madeBy[r.out[1]] = list
+        end
+      end
+    end
+  end
+  for _, id in ipairs(madeBy[itemID] or {}) do
+    if ES:IsRecipeKnown(id) then return true end
+  end
+  return false
+end
+function Inventory.KeepKind(itemID)
+  if ES.db.sellAnyKind then return nil end
+  local instant = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+  local classID = instant and select(6, instant(itemID))
+  local kind = classID and KEEP_CLASSES[classID]
+  if not kind then return nil end
+  local _, quality = ES:GetItemData(itemID)
+  if quality == 0 and kind ~= "quest" then return nil end -- (basura gris: al vendedor)
+  if kind == "consumable" and MadeByYou(itemID) then return nil end
+  return kind
+end
+
 -- ¿No se vende? Devuelve "user" (lo marcaste), "tool" (herramienta), "gear" (tu
--- equipo: ligado o en un conjunto) o nil. `bound`: ligado en tus bolsas
+-- equipo: ligado o en un conjunto), "bought" (lo compraste hace poco), "consumable",
+-- "quest" o "misc" (Inventory.KeepKind) o nil. `bound`: ligado en tus bolsas
 function Inventory.NeverSell(itemID, bound)
   local mark = ES.db.neverSell and ES.db.neverSell[itemID]
   if mark == true then return "user" end
-  if mark ~= false and Inventory.IsTool(itemID) then return "tool" end
-  if mark ~= false and Inventory.IsGear(itemID, bound) then return "gear" end
-  return nil
+  if mark == false then return nil end -- (lo desmarcaste tú: se propone)
+  if Inventory.IsTool(itemID) then return "tool" end
+  if Inventory.IsGear(itemID, bound) then return "gear" end
+  if not ES.db.sellAnyKind and ES.Ledger and ES.Ledger:BoughtAt(itemID) then return "bought" end
+  return Inventory.KeepKind(itemID)
 end
+
+-- Por qué no se vende, para la fila y el tooltip
+local NEVER_TEXT = ES.Localize({
+  tool = "herramienta de profesión: no se vende", gear = "tu equipo: no se vende",
+  bought = "lo compraste hace poco: no se vende", consumable = "consumible o componente: no se vende",
+  quest = "objeto de misión o llave: no se vende", misc = "objeto varios (órdenes, fichas): no se vende",
+  user = "lo marcaste para no venderlo",
+})
+Inventory.NEVER_TEXT = NEVER_TEXT
 
 -- Marcar o desmarcar "no vender nunca" (clic derecho en una fila)
 function Inventory.SetNeverSell(itemID, on)
@@ -144,9 +195,14 @@ function Inventory.SetNeverSell(itemID, on)
   if on then
     ES.db.neverSell[itemID] = true
   else
-    -- (una herramienta o un equipo desmarcados se pueden vender: false; lo demás vuelve a lo normal)
+    -- (una herramienta, un equipo, lo recién comprado o un consumible desmarcados se
+    -- pueden vender: false; lo demás vuelve a lo normal)
     -- (equipo: como si estuviera ligado; si no lo está, el false no cambia nada)
-    if Inventory.IsTool(itemID) or Inventory.IsGear(itemID, true) then ES.db.neverSell[itemID] = false else ES.db.neverSell[itemID] = nil end
+    local protected = Inventory.IsTool(itemID) or Inventory.IsGear(itemID, true) or Inventory.KeepKind(itemID)
+    if ES.Ledger and ES.Ledger:BoughtAt(itemID) then
+      ES.Ledger:ForgetBought(itemID)
+    end
+    if protected then ES.db.neverSell[itemID] = false else ES.db.neverSell[itemID] = nil end
   end
   ES:Print(string.format(on and L["%s: no se propondrá venderlo. Se deshace con clic derecho en \"No se venden\" (pestaña Inventario)."]
     or L["%s: vuelve a proponerse para vender."], ES:DataItemName(itemID) or ("#" .. itemID)))
@@ -160,16 +216,34 @@ end
 -- Qué hacer con cada objeto de tus bolsas:
 -- { itemID, count, keep, vendorN, vendorUnit, ahN, ahUnit (neto por unidad), listPrice,
 --   value, rise (subida respecto a su referencia, 0.4 = +40%), ref, verdict, fair }
+-- Equipo imprescindible (GearPicks.lua): las piezas que fabricas para ti no se venden
+local function GearKeep()
+  local keep = {}
+  if not ES.Gear then return keep end
+  for _, p in ipairs(ES.PROFESSIONS) do
+    if ES.Data[p.key] and ES:GetProfessionSkill(ES.Data[p.key].skillLine) then
+      for _, pick in ipairs(ES.Gear:On(p.key) and ES.Gear:Picks(p.key) or {}) do
+        keep[pick.e.item] = (keep[pick.e.item] or 0) + pick.qty
+      end
+    end
+  end
+  return keep
+end
+
 function Inventory:List()
   local scan = ES.db.scans and ES.db.scans[ES:RealmKey()]
   local need = RouteNeeds()
+  local gear = GearKeep()
   local list = {}
   for id, it in pairs(BagContents()) do
     local never = Inventory.NeverSell(id, it.bound)
     local keep = never and it.count or math.min(it.count, need[id] or 0)
+    local gearKeep = not never and math.min(it.count - keep, gear[id] or 0) or 0
+    keep = keep + gearKeep
     local n = it.count - keep
     local vendor = not it.noValue and ES:VendorSellPrice(id) or 0
-    local e = { itemID = id, count = it.count, keep = keep, never = never, vendorUnit = vendor, vendorN = 0, ahN = 0, value = 0 }
+    local e = { itemID = id, count = it.count, keep = keep, never = never, vendorUnit = vendor, vendorN = 0, ahN = 0, value = 0,
+      gearKeep = gearKeep > 0 and gearKeep or nil }
     local entry = scan and scan.items[id]
     -- Sin precio en la AH no se ha comparado: que se vea (si no, "al vendedor" parece
     -- que la AH paga menos)
@@ -357,7 +431,7 @@ local function Tooltip(e, noActions)
     end
     GameTooltip:AddLine(" ")
     if e.ahN > 0 and ES:IsAuctionHouseOpen() then
-      GameTooltip:AddLine(string.format(L["Clic: anunciar %d en la AH."], e.ahN), 0.5, 0.8, 1)
+      GameTooltip:AddLine(string.format(L["Dos clics: anunciar %d en la AH."], e.ahN), 0.5, 0.8, 1)
     elseif e.vendorN > 0 and ES.Ledger:MerchantOpen() then
       GameTooltip:AddLine(string.format(L["Clic: vender %d al vendedor."], e.vendorN), 0.5, 0.8, 1)
     elseif not e.never then
@@ -366,6 +440,8 @@ local function Tooltip(e, noActions)
     if e.never then
       GameTooltip:AddLine(e.never == "tool" and L["Herramienta de profesión: sin ella no puedes fabricar o recolectar. No se propone venderla."]
         or e.never == "gear" and L["Tu equipo (ligado a ti o en un conjunto del gestor de equipo): no se propone venderlo, para no venderlo sin querer. Se cambia en /cj opciones."]
+        or e.never == "bought" and string.format(L["Lo compraste hace poco: no se propone venderlo durante %d días, para no anunciar sin querer lo que acabas de comprar. Se cambia en /cj opciones."], ES.Ledger.BOUGHT_DAYS)
+        or (e.never == "consumable" or e.never == "quest" or e.never == "misc") and L["Consumibles, objetos de misión, componentes, munición y objetos varios (órdenes, fichas) no se proponen vender, salvo lo gris y lo que fabricas tú. Se cambia en /cj opciones."]
         or L["Lo marcaste para no venderlo."], 0.4, 1, 0.4, true)
       GameTooltip:AddLine(L["Clic derecho: volver a proponerlo para vender."], 0.6, 0.6, 0.6)
     elseif e.keep < e.count then
@@ -380,6 +456,8 @@ Inventory.Tooltip = Tooltip -- (también la ventana junto a la AH, AuctionSellUI
 -- Clic: con la AH abierta anuncia lo que va a la AH; con el vendedor, vende lo suyo
 local function Act(e)
   if e.ahN > 0 and ES:IsAuctionHouseOpen() then
+    -- (dos clics: el primero solo dice qué va a anunciar, ver Ledger:ArmPost)
+    if ES.Ledger:PostPriceState() ~= "scanning" and not ES.Ledger:ArmPost(e.itemID, e.ahN, e.listPrice) then return end
     ES.Ledger:PostOnAH(e.itemID, e.ahN, e.listPrice, e.hours)
   elseif e.vendorN > 0 and ES.Ledger:MerchantOpen() then
     ES.Ledger:SellToVendor(e.itemID, e.vendorN)
@@ -398,9 +476,11 @@ local function Line(e, mode)
     sub = GREY .. string.format(L["AH: te quedarían %s, pero si caduca pierdes %s de depósito · el vendedor no lo compra"],
       ES.Money(e.ahNet or 0), ES.Money(e.depositRisk or 0)) .. "|r"
   elseif mode == "never" then
-    sub = GREY .. (e.never == "tool" and L["herramienta de profesión: no se vende"]
-      or e.never == "gear" and L["tu equipo: no se vende"] or L["lo marcaste para no venderlo"])
+    sub = GREY .. (NEVER_TEXT[e.never] or NEVER_TEXT.user)
       .. " · " .. L["clic derecho: volver a proponerlo"] .. "|r"
+  elseif mode == "keep" and e.gearKeep and e.gearKeep >= e.keep then
+    sub = "|cff4da6ff" .. string.format(L["imprescindible: guarda %d para ti"], e.keep) .. "|r"
+      .. (e.count > e.keep and (GREY .. " · " .. string.format(L["%d de sobra"], e.count - e.keep) .. "|r") or "")
   elseif mode == "keep" then
     sub = GREEN .. string.format(L["guarda %d para tus rutas"], e.keep) .. "|r"
       .. (e.count > e.keep and (GREY .. " · " .. string.format(L["%d de sobra"], e.count - e.keep) .. "|r") or "")
@@ -517,7 +597,7 @@ function ES:RenderInventory()
   local merchant = ES.Ledger:MerchantOpen()
   -- Qué hace el clic en una fila ahora mismo (vender o anunciar sin buscarlo en las bolsas)
   local hint = merchant and L["Clic en una fila: venderla al vendedor."]
-    or ES:IsAuctionHouseOpen() and L["Clic en una fila: anunciarla en la AH."]
+    or ES:IsAuctionHouseOpen() and L["Dos clics en una fila: anunciarla en la AH."]
     or L["Con vendedor o AH abiertos, clic en una fila para venderla."] -- (corto: comparte línea con los precios)
   page.hintText = "  |cff80ccff" .. hint .. "|r" -- (también al avanzar el escaneo, ES:UpdatePostStatus)
   page.status:SetText(page.status:GetText() .. page.hintText)

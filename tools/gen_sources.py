@@ -91,6 +91,14 @@ def main():
                 quest_chain(p, seen)
         return seen
 
+    # Lo que pide entregar cada misión, con objeto y cantidad (tools/forever/quest_turnins.csv,
+    # revisado a mano contra los nombres del cliente; ver la cabecera del CSV)
+    turnins = {}
+    if (HERE / "forever" / "quest_turnins.csv").exists():
+        with open(HERE / "forever" / "quest_turnins.csv", encoding="utf-8") as f:
+            for r in csv.DictReader(l for l in f if not l.startswith("#")):
+                turnins.setdefault(int(r["quest"]), []).append((int(r["item"]), int(r["count"]), r["name"]))
+
     items, quests, npcs_needed = {}, {}, set(trainers)
     drops = {}  # pergamino -> (criaturas o None si es del mundo, cuántas criaturas, cuántos objetos, niveles)
     droppers = set()  # criaturas de las que se guarda el nivel
@@ -280,10 +288,17 @@ def main():
                 parts.append(f"o = {n_objs}")
         out.append(f"  [{item_id}] = {{ {', '.join(parts)} }},")
     out += ["}", "", "-- [misión] = { nombre, bando (\"A\", \"H\" o \"\" los dos), nivel mínimo, { quien la da },",
-            "--   texto de lo que pide entregar (o nil), misiones antes en su cadena }", "ES.Data.Quests = {"]
+            "--   texto de lo que pide entregar (o nil), misiones antes en su cadena,",
+            "--   { { objeto, cantidad[, nombre] } } lo que pide entregar (objeto 0: sin precio, solo su nombre) }",
+            "ES.Data.Quests = {"]
     for q, (name, side, level, starters, asks, chain) in sorted(quests.items()):
+        items = turnins.get(q)
+        lua_items = ""
+        if items:
+            lua_items = ", { " + ", ".join(
+                f"{{ {i}, {n}, {lua_str(nm)} }}" if i == 0 else f"{{ {i}, {n} }}" for i, n, nm in items) + " }"
         out.append(f"  [{q}] = {{ {lua_str(name)}, \"{side}\", {level}, {lua_ids(starters)}, "
-                   f"{lua_str(asks) if asks else 'nil'}, {chain} }},")
+                   f"{lua_str(asks) if asks else 'nil'}, {chain}{lua_items} }},")
     out += ["}", "",
             "-- [PNJ] = { nombre, bando (\"A\", \"H\", \"\" los dos, \"X\" ninguno), mapa, x, y } (x, y de 0 a 1;",
             "-- en una mazmorra: mapa 0 y la zona como 6.º campo)", "ES.Data.NPCs = {"]

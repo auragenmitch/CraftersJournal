@@ -1,0 +1,110 @@
+# Lo que pide entregar cada misión que da una receta (para ponerle precio en la ruta).
+# Sacado del texto de objetivos de QuestieDB (ES.Data.Quests, campo asks) y de los
+# nombres del cliente de Forever (tools/wago/ItemSparse_forever.csv). item = 0: objeto
+# que no está en las tablas del addon (botín de misión, comida de vendedor...): se
+# enseña por su nombre y la ruta no le pone precio. gen_sources.py lo pone en
+# ES.Data.Quests[misión][7] = { { item, cantidad[, nombre] }, ... }
+quest,item,count,name
+22,723,8,Goretusk Liver
+38,729,3,Stringy Vulture Meat
+38,731,3,Goretusk Snout
+38,730,3,Murloc Eye
+38,0,3,Okra
+90,1015,10,Lean Wolf Flank
+90,0,1,Stormwind Seasoning Herbs
+92,1080,5,Tough Condor Meat
+92,0,5,Great Goretusk Snout
+92,1081,5,Crisp Spider Meat
+93,2251,6,Gooey Spider Leg
+127,0,10,Spotted Sunfish
+384,2886,6,Crag Boar Rib
+384,2894,1,Rhapsody Malt
+385,2924,5,Crocolisk Meat
+385,0,6,Crocolisk Skin
+418,3173,3,Bear Meat
+418,3172,3,Boar Intestines
+418,3174,3,Spider Ichor
+471,0,6,Giant Crocolisk Skin
+501,0,10,Mountain Lion Blood
+555,3712,10,Turtle Meat
+555,3713,1,Soothing Spices
+715,929,1,Healing Potion
+715,3823,1,Lesser Invisibility Potion
+769,2318,4,Light Leather
+769,2320,4,Coarse Thread
+862,5051,8,Dig Rat
+1578,2845,6,Copper Axe
+1578,2851,6,Copper Chain Belt
+1582,4239,1,Embossed Leather Gloves
+1582,2309,5,Embossed Leather Boots
+1582,2310,5,Embossed Leather Cloak
+1618,2857,4,Runed Copper Belt
+1618,6214,4,Heavy Copper Maul
+2178,5469,5,Strider Meat
+2751,2868,2,Patterned Bronze Bracers
+2751,7957,2,Bronze Greatsword
+2751,5635,2,Sharp Claw
+2752,7958,4,Bronze Battle Axe
+2752,7956,4,Bronze Warhammer
+2753,3836,4,Green Iron Helm
+2753,3835,4,Green Iron Bracers
+2753,3842,2,Green Iron Leggings
+2754,3851,2,Solid Iron Maul
+2754,3482,2,Silvered Bronze Boots
+2754,3483,2,Silvered Bronze Gauntlets
+2758,6040,6,Golden Scale Bracers
+2761,3860,40,Mithril Bar
+2761,3575,40,Iron Bar
+2762,3860,40,Mithril Bar
+2762,6037,5,Truesilver Bar
+2763,3860,40,Mithril Bar
+2763,3864,4,Citrine
+2848,8173,6,Thick Armor Kit
+2848,8153,1,Wildvine
+2849,8189,2,Turtle Scale Breastplate
+2849,8187,2,Turtle Scale Gloves
+2849,8153,1,Wildvine
+2850,8175,2,Nightscape Tunic
+2850,8176,2,Nightscape Headband
+2850,8153,1,Wildvine
+2851,8193,2,Nightscape Pants
+2851,8197,2,Nightscape Boots
+2851,8153,2,Wildvine
+2852,8191,2,Turtle Scale Helm
+2852,8198,2,Turtle Scale Bracers
+2852,8153,2,Wildvine
+2855,8173,6,Thick Armor Kit
+2855,8153,1,Wildvine
+2856,8189,2,Turtle Scale Breastplate
+2856,8187,2,Turtle Scale Gloves
+2856,8153,1,Wildvine
+2857,8175,2,Nightscape Tunic
+2857,8176,2,Nightscape Headband
+2857,8153,1,Wildvine
+2858,8193,2,Nightscape Pants
+2858,8197,2,Nightscape Boots
+2858,8153,2,Wildvine
+2859,8191,2,Turtle Scale Helm
+2859,8198,2,Turtle Scale Bracers
+2859,8153,2,Wildvine
+4161,5465,7,Small Spider Leg
+5124,12655,6,Enchanted Thorium Bar
+5124,7078,2,Essence of Fire
+5124,7910,4,Star Ruby
+5124,0,1,Unfired Plate Gauntlets
+7321,3712,10,Turtle Meat
+7321,3713,1,Soothing Spices
+8586,9061,20,Goblin Rocket Fuel
+8586,8150,20,Deeprock Salt
+92553,6889,3,Small Egg
+92553,5469,8,Strider Meat
+92911,255007,8,Golem Isospring
+92911,4363,4,Copper Modulator
+92911,4405,1,Crude Scope
+93317,0,6,Windsong Crawler Meat
+95217,2840,12,Copper Bar
+95217,0,4,Toughened Boar Hide
+96874,0,5,Weathered Spine
+96874,3470,5,Rough Grinding Stone
+96875,0,5,Rough Lizard Hide
+96875,4231,2,Cured Light Hide

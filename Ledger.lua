@@ -396,7 +396,10 @@ do
     if event == "COMMODITY_PURCHASE_SUCCEEDED" then
       local b = Ledger.buying
       Ledger.buying = nil
-      if b then Ledger:NoteOnTheWay(b.itemID, b.qty) end
+      if b then
+        Ledger:NoteOnTheWay(b.itemID, b.qty)
+        Ledger:NoteBought(b.itemID)
+      end
       return
     elseif event == "COMMODITY_PURCHASE_FAILED" then
       Ledger.buying = nil
@@ -558,10 +561,66 @@ function Ledger:SettleOnTheWay()
   if changed and ES.RenderShopping then ES:RenderShopping() end
 end
 
+---------------------------------------------------------------------------
+-- Lo que acabas de comprar no se propone vender (CurseForge: abrió la AH, un clic sin
+-- querer en la ventana de vender y anunció lo que acababa de comprar). Se apunta la
+-- hora de cada compra: en la AH (al confirmarla, y al recoger su correo de "compra"
+-- del buzón, que también cubre lo comprado con otro addon o a mano) y al vendedor.
+-- ES.db.bought[itemID] = hora de la última compra; caduca a los BOUGHT_DAYS días.
+---------------------------------------------------------------------------
+Ledger.BOUGHT_DAYS = 3
+
+function Ledger:NoteBought(itemID)
+  if not (ES.db and itemID) then return end
+  if type(ES.db.bought) ~= "table" then ES.db.bought = {} end
+  ES.db.bought[itemID] = time()
+end
+
+-- Hora de la última compra de `itemID` en los últimos BOUGHT_DAYS días, o nil
+function Ledger:BoughtAt(itemID)
+  local t = ES.db and type(ES.db.bought) == "table" and ES.db.bought[itemID]
+  if not t then return nil end
+  if time() - t > Ledger.BOUGHT_DAYS * 86400 then
+    ES.db.bought[itemID] = nil
+    return nil
+  end
+  return t
+end
+
+function Ledger:ForgetBought(itemID)
+  if ES.db and type(ES.db.bought) == "table" then ES.db.bought[itemID] = nil end
+end
+
+-- Correo de la AH con una compra tuya (GetInboxInvoiceInfo: "buyer"): lo que trae
+local function NoteMailPurchase(index, attach)
+  if not (GetInboxInvoiceInfo and GetInboxItem) then return end
+  local ok, kind = pcall(GetInboxInvoiceInfo, index)
+  if not ok or kind ~= "buyer" then return end
+  for a = attach or 1, attach or (ATTACHMENTS_MAX_RECEIVE or 16) do
+    local okItem, _, itemID = pcall(GetInboxItem, index, a)
+    if okItem and itemID then Ledger:NoteBought(itemID) end
+  end
+end
+
 -- La compra que Blizzard está confirmando (su botón "Comprar ahora")
 function Ledger:InstallPurchaseHook()
+  if not hooksecurefunc then return end
+  -- Comprar al vendedor (con el addon o a mano)
+  if BuyMerchantItem and BuyMerchantItem ~= Ledger.hookedMerchantBuy then
+    hooksecurefunc("BuyMerchantItem", function(i) Ledger:NoteBought(MerchantItemID(i)) end)
+    Ledger.hookedMerchantBuy = BuyMerchantItem
+  end
+  -- Recoger del buzón lo comprado en la AH
+  if TakeInboxItem and TakeInboxItem ~= Ledger.hookedTakeInbox then
+    hooksecurefunc("TakeInboxItem", function(index, attach) NoteMailPurchase(index, attach) end)
+    Ledger.hookedTakeInbox = TakeInboxItem
+  end
+  if AutoLootMailItem and AutoLootMailItem ~= Ledger.hookedAutoLoot then
+    hooksecurefunc("AutoLootMailItem", function(index) NoteMailPurchase(index) end)
+    Ledger.hookedAutoLoot = AutoLootMailItem
+  end
   local AH = C_AuctionHouse
-  if not (hooksecurefunc and AH and AH.ConfirmCommoditiesPurchase) or AH.ConfirmCommoditiesPurchase == Ledger.hookedConfirm then return end
+  if not (AH and AH.ConfirmCommoditiesPurchase) or AH.ConfirmCommoditiesPurchase == Ledger.hookedConfirm then return end
   hooksecurefunc(AH, "ConfirmCommoditiesPurchase", function(itemID, quantity)
     Ledger.buying = { itemID = itemID, qty = quantity }
   end)
@@ -637,6 +696,30 @@ end
 -- Anuncia `n` unidades en la AH abierta a `unit` cobre cada una, en una subasta de
 -- `hours` horas (24 por defecto; ver DurationIndex). Solo con la AH de Forever
 -- (C_AuctionHouse); con la clásica, se anuncia a mano. Los materiales
+-- Anunciar pide dos clics en la misma fila (CurseForge: un clic sin querer en la
+-- ventana de vender anunció lo que acababa de comprar). El primero solo prepara y
+-- dice qué va a anunciar; el segundo, antes de ARM_SECONDS, anuncia. Devuelve true
+-- si este clic es el que confirma
+Ledger.ARM_SECONDS = 4
+function Ledger:ArmPost(itemID, n, unit)
+  local now = GetTime and GetTime() or 0
+  local a = self.armed
+  if a and a.itemID == itemID and a.n == n and now - a.at <= Ledger.ARM_SECONDS then
+    self.armed = nil
+    return true
+  end
+  self.armed = { itemID = itemID, n = n, at = now }
+  ES:Print(string.format(L["Vuelve a pulsar para anunciar %d de %s a %s (o espera y no se anuncia nada)."],
+    n, ES:DataItemName(itemID) or ("#" .. itemID), ES.Money(Ledger.PostPrice(unit or 0))))
+  return false
+end
+
+-- ¿Está preparada la fila de `itemID` (primer clic dado)?
+function Ledger:IsArmed(itemID)
+  local a = self.armed
+  return a and a.itemID == itemID and (GetTime and GetTime() or 0) - a.at <= Ledger.ARM_SECONDS or false
+end
+
 -- (commodities) van en un solo anuncio; el resto, todos de una vez y, si la AH no
 -- lo acepta, de uno en uno. Devuelve cuántos anunció.
 function Ledger:PostOnAH(itemID, n, unit, hours)

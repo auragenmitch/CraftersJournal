@@ -3014,8 +3014,12 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
   local posted
   ES.IsAuctionHouseOpen = function() return true end
   ES.Ledger.PostOnAH = function(_, id, n, price) posted = { id, n, price } end
-  for _, row in ipairs(page.rows) do if row.onClick and row.title and tostring(row.title._text):find("3×") then row.onClick() end end
-  assert(posted and posted[1] == UP and posted[2] == 3, "el clic con la AH abierta no anunció")
+  local function ClickUp() for _, row in ipairs(page.rows) do if row.onClick and row.title and tostring(row.title._text):find("3×") then row.onClick() end end end
+  ES.Ledger.armed = nil
+  ClickUp()
+  assert(not posted, "un solo clic con la AH abierta ya anuncia (tienen que ser dos)")
+  ClickUp()
+  assert(posted and posted[1] == UP and posted[2] == 3, "el segundo clic con la AH abierta no anunció")
   -- Ventana junto a la AH: lo que el Inventario manda a la AH, con clic para anunciar
   do
     local savedMain, savedAHF = CraftersJournalMainFrame, AuctionHouseFrame
@@ -3026,10 +3030,16 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
     local savedData, savedQC = ES.GetItemData, ITEM_QUALITY_COLORS[3]
     ES.GetItemData = function(_, id) if id == UP then return "Blue Thing", 3, 134400 end return savedData(ES, id) end
     ITEM_QUALITY_COLORS[3] = { r = 0, g = 0.44, b = 0.87, hex = "|cff0070dd" }
+    -- Por defecto no sale (CurseForge: un clic sin querer anunciaba lo que llevabas)
+    ES.db.auctionSellWindow = nil
+    ES.AuctionSell:Refresh()
+    assert(not CraftersJournalAuctionSellPanel or CraftersJournalAuctionSellPanel._shown == false,
+      "la ventana de vender junto a la AH sale sin activarla en las opciones")
+    ES.db.auctionSellWindow = true
     ES.AuctionSell:Refresh()
     ES.GetItemData, ITEM_QUALITY_COLORS[3] = savedData, savedQC
     local sp = CraftersJournalAuctionSellPanel
-    assert(sp and sp._shown == true, "con la AH abierta sale la ventana de vender en la AH")
+    assert(sp and sp._shown == true, "activada, con la AH abierta sale la ventana de vender en la AH")
     local upRow
     for _, row in ipairs(sp.rows) do if row._shown ~= false and row.entry and row.entry.itemID == UP then upRow = row end end
     assert(upRow and upRow.entry.ahN == 3, "la ventana de la AH lista lo que va a la AH")
@@ -3067,16 +3077,30 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
     -- Clic: todas las de la fila (como en Inventario); Mayús+clic: solo una
     local savedShift = IsShiftKeyDown
     IsShiftKeyDown = function() return false end
+    ES.Ledger.armed = nil
     upRow._scripts.OnClick(upRow, "LeftButton")
-    assert(posted and posted[1] == UP and posted[2] == 3, "clic en la ventana de la AH: anunciar todas (" .. tostring(posted and posted[2]) .. ")")
+    assert(not posted, "un solo clic en la ventana de la AH ya anuncia (tienen que ser dos)")
+    assert(tostring(upRow.qty._text):find("pulsar"), "tras el primer clic, la fila dice que vuelvas a pulsar: " .. tostring(upRow.qty._text))
+    upRow._scripts.OnClick(upRow, "LeftButton")
+    assert(posted and posted[1] == UP and posted[2] == 3, "dos clics en la ventana de la AH: anunciar todas (" .. tostring(posted and posted[2]) .. ")")
     posted = nil
     IsShiftKeyDown = function() return true end
     upRow._scripts.OnClick(upRow, "LeftButton")
-    assert(posted and posted[1] == UP and posted[2] == 1, "Mayús+clic en la ventana de la AH: anunciar solo 1")
+    assert(not posted, "Mayús+clic: el primero tampoco anuncia")
+    upRow._scripts.OnClick(upRow, "LeftButton")
+    assert(posted and posted[1] == UP and posted[2] == 1, "Mayús y dos clics en la ventana de la AH: anunciar solo 1")
     IsShiftKeyDown = savedShift
+    -- Un clic en una fila y otro en otra: ninguno anuncia
+    posted = nil
+    ES.Ledger.armed = nil
+    ES.Ledger:ArmPost(UP + 1, 3, 100)
+    upRow._scripts.OnClick(upRow, "LeftButton")
+    assert(not posted, "el segundo clic en otra fila anuncia")
+    ES.Ledger.armed = nil
+    log[#log+1] = "     ventana de la AH: sale solo si la activas y anunciar pide dos clics"
     -- Abajo, una línea por acción
     local hint = tostring(sp.hint._text)
-    assert(hint:find("Clic") and hint:find("Mayús") and hint:find("derecho") and select(2, hint:gsub("\n", "")) >= 2,
+    assert(hint:find("clics") and hint:find("Mayús") and hint:find("derecho") and select(2, hint:gsub("\n", "")) >= 2,
       "la ayuda de abajo, una línea por acción: " .. hint)
     -- Clic derecho: no venderlo nunca, y la fila desaparece al momento de esta ventana
     local savedPrint, savedNever = ES.Print, ES.db.neverSell
@@ -3100,6 +3124,7 @@ step("inventario: qué vender de las bolsas, dónde y qué guardar", function()
     ES.AuctionSell:Refresh()
     assert(sp._shown == false, "con la ventana grande al lado de la AH, la de vender no sale")
     AuctionHouseFrame = savedAHF
+    ES.db.auctionSellWindow = nil
   end
   -- La ventana junto al vendedor vende también lo que el Inventario manda al vendedor
   local inSell = {}
@@ -3931,6 +3956,316 @@ step("cambiar de idioma al momento (sin recargar)", function()
   assert(ES.Data.Cooking.recipes[2538].name == "Carne de lobo carbonizada", "receta en español")
   assert(ES:ProfLabel("Leatherworking") == "Peletería", "profesión en español")
   ReloadUI = nil
+end)
+step("no se proponen vender consumibles, objetos de misión ni lo recién comprado", function()
+  local INV, Ledger = ES.Inventory, ES.Ledger
+  local savedInstant, savedData, savedKnown, savedNever, savedBought, savedAny, savedPrint =
+    GetItemInfoInstant, ES.GetItemData, ES.IsRecipeKnown, ES.db.neverSell, ES.db.bought, ES.db.sellAnyKind, ES.Print
+  ES.Print = function() end
+  ES.db.neverSell, ES.db.bought, ES.db.sellAnyKind = {}, {}, nil
+  -- (la "poción": lo que fabrica la primera receta de Alquimia; si sabes la receta, sí
+  -- se propone: es tuya)
+  local potionRecipe, POTION
+  for id, r in pairs(ES.Data.Alchemy.recipes) do if r.out and (not potionRecipe or id < potionRecipe) then potionRecipe, POTION = id, r.out[1] end end
+  local QUEST, MAT, JUNK, WRIT = 990001, 2318, 990002, 990003
+  local CLASS = { [POTION] = 0, [QUEST] = 12, [MAT] = 7, [JUNK] = 15, [WRIT] = 15 }
+  GetItemInfoInstant = function(id) return id, "x", "y", "", 134400, CLASS[id], 0 end
+  ES.GetItemData = function(_, id) if id == JUNK then return "Junk", 0, 134400 end return "Obj", 1, 134400 end
+  ES.IsRecipeKnown = function(_, id) return false end
+  assert(INV.NeverSell(POTION) == "consumable", "una poción que no fabricas se propone vender: " .. tostring(INV.NeverSell(POTION)))
+  assert(INV.NeverSell(QUEST) == "quest", "un objeto de misión se propone vender")
+  assert(INV.NeverSell(WRIT) == "misc", "un objeto varios (orden) se propone vender")
+  assert(INV.NeverSell(JUNK) == nil, "lo gris sí se vende")
+  assert(INV.NeverSell(MAT) == nil, "los materiales sí se venden")
+  ES.IsRecipeKnown = function(_, id) return id == potionRecipe end
+  assert(INV.NeverSell(POTION) == nil, "la poción que fabricas tú sí se propone")
+  ES.IsRecipeKnown = function() return false end
+  -- Lo recién comprado: al vendedor (gancho de BuyMerchantItem) o en la AH, 3 días
+  Ledger:NoteBought(MAT)
+  assert(INV.NeverSell(MAT) == "bought", "lo que acabas de comprar se propone vender")
+  ES.db.bought[MAT] = time() - 4 * 86400
+  assert(INV.NeverSell(MAT) == nil and ES.db.bought[MAT] == nil, "a los 3 días vuelve a proponerse")
+  Ledger:NoteBought(MAT)
+  -- Clic derecho en "No se venden": se puede vender igualmente
+  INV.SetNeverSell(MAT, false)
+  assert(INV.NeverSell(MAT) == nil, "desmarcado, lo comprado se propone")
+  INV.SetNeverSell(POTION, false)
+  assert(INV.NeverSell(POTION) == nil and ES.db.neverSell[POTION] == false, "desmarcada, la poción se propone")
+  -- La opción: se propone todo, como antes
+  ES.db.neverSell = {}
+  ES.db.sellAnyKind = true
+  Ledger:NoteBought(MAT)
+  assert(INV.NeverSell(QUEST) == nil and INV.NeverSell(MAT) == nil and INV.NeverSell(POTION) == nil, "con la opción se propone todo")
+  -- Y el texto de la fila y del tooltip, para cada motivo
+  for _, why in ipairs({ "bought", "consumable", "quest", "misc", "tool", "gear", "user" }) do
+    assert(INV.NEVER_TEXT[why], "sin texto para " .. why)
+  end
+  GetItemInfoInstant, ES.GetItemData, ES.IsRecipeKnown, ES.db.neverSell, ES.db.bought, ES.db.sellAnyKind, ES.Print =
+    savedInstant, savedData, savedKnown, savedNever, savedBought, savedAny, savedPrint
+  log[#log+1] = "     vender: consumibles, misión, varios y lo recién comprado se guardan; lo tuyo y lo gris, no"
+end)
+step("compras: vendedor y correo de la AH cuentan como recién comprado", function()
+  local Ledger = ES.Ledger
+  local savedBought = ES.db.bought
+  ES.db.bought = {}
+  -- (los ganchos se instalan sobre funciones que existan)
+  local savedBuy, savedTake, savedInv, savedItem, savedHook = BuyMerchantItem, TakeInboxItem, GetInboxInvoiceInfo, GetInboxItem, hooksecurefunc
+  local hooks = {}
+  hooksecurefunc = function(a, b, c) if type(a) == "string" then hooks[a] = b else hooks[b] = c end end
+  BuyMerchantItem, TakeInboxItem = function() end, function() end
+  local savedMID = GetMerchantItemID
+  GetMerchantItemID = function(i) return i == 3 and 2320 or nil end
+  Ledger.hookedMerchantBuy, Ledger.hookedTakeInbox = nil, nil
+  Ledger:InstallPurchaseHook()
+  assert(hooks.BuyMerchantItem and hooks.TakeInboxItem, "faltan los ganchos de compra")
+  hooks.BuyMerchantItem(3, 5)
+  assert(Ledger:BoughtAt(2320), "comprar al vendedor no cuenta como recién comprado")
+  GetInboxInvoiceInfo = function(i) return i == 1 and "buyer" or "seller" end
+  GetInboxItem = function(i, a) return "Light Leather", 2318 end
+  hooks.TakeInboxItem(1, 1)
+  assert(Ledger:BoughtAt(2318), "recoger una compra de la AH del buzón no cuenta")
+  ES.db.bought = {}
+  hooks.TakeInboxItem(2, 1)
+  assert(not Ledger:BoughtAt(2318), "una venta tuya (correo de vendedor) no es una compra")
+  BuyMerchantItem, TakeInboxItem, GetInboxInvoiceInfo, GetInboxItem, hooksecurefunc, GetMerchantItemID = savedBuy, savedTake, savedInv, savedItem, savedHook, savedMID
+  Ledger.hookedMerchantBuy, Ledger.hookedTakeInbox = nil, nil
+  ES.db.bought = savedBought
+end)
+step("precios de Auctionator: sin escaneo propio y tras su escaneo completo", function()
+  local Atr = ES.AtrPrices
+  local key = ES:RealmKey()
+  local savedScan, savedAfter, savedStack, savedLast = ES.db.scans[key], C_Timer.After, debugstack, ES.db.lastFullScan
+  local savedStatus, savedPrint = ES.Scanner.statusText, ES.Print
+  ES.Print = function() end
+  local Q = {}
+  C_Timer.After = function(_, f) Q[#Q + 1] = f end
+  local function Pump() for _ = 1, 200 do local f = table.remove(Q, 1) if not f then return end f() end end
+  -- Auctionator: precio de hoy para los primeros 40 objetos de profesiones; uno, de hace 2 días
+  local PRICES, AGES, CB = {}, {}, nil
+  for i, id in ipairs(Atr.Items()) do if i > 40 then break end PRICES[id], AGES[id] = 1000 + i, 0 end
+  PRICES[2318], AGES[2318] = 55, 0
+  PRICES[4231], AGES[4231] = 300, 2
+  Auctionator = { API = { v1 = {
+    GetAuctionPriceByItemID = function(caller, id) assert(caller == Atr.CALLER) return PRICES[id] end,
+    GetAuctionAgeByItemID = function(_, id) return AGES[id] end,
+    RegisterForDBUpdate = function(_, cb) CB = cb end } } }
+  Atr.registered, Atr.bootstrapTried, Atr.awaiting, Atr.collecting = nil, nil, nil, nil
+  assert(Atr:Enabled() and Atr:CanFollow(), "con Auctionator, se usan sus precios")
+  -- 1. Escaneo propio de hace 3 días: se toman los de hoy, sin perder los demás
+  ES.db.scans[key] = { time = time() - 3 * 86400, items = {
+    [2318] = { minUnit = 50, quantity = 200, listings = 10, ladder = { 50, 100, 60, 100 } },
+    [999999] = { minUnit = 7, quantity = 3 } } }
+  Atr:Bootstrap()
+  Pump()
+  local scan = ES.db.scans[key]
+  assert(scan.source == "auctionator" and time() - scan.time < 5, "no se tomaron los precios de Auctionator")
+  assert(scan.items[2318].minUnit == 55 and scan.items[2318].quantity == 200 and not scan.items[2318].ladder,
+    "precio de Auctionator, unidades del escaneo anterior y sin la escalera vieja (cambió el precio)")
+  assert(scan.items[999999] and scan.items[999999].minUnit == 7, "al empezar, lo que Auctionator no vio hoy se queda")
+  assert(not scan.items[4231] or scan.items[4231].minUnit ~= 300, "un precio de hace 2 días no se toma")
+  -- Con escaneo reciente no se toca
+  Atr.bootstrapTried = nil
+  scan.time = time() - 60
+  PRICES[2318] = 77
+  Atr:Bootstrap()
+  Pump()
+  assert(ES.db.scans[key].items[2318].minUnit == 55, "con escaneo reciente se tomaron los de Auctionator")
+  -- 2. Auctionator pide el escaneo completo: no se lee otra vez; al guardar sus precios, se toman
+  assert(Atr.FromAuctionator("[string \"@Interface/AddOns/Auctionator/Source/FullScan/Mixins/Frame.lua\"]:55: in function"), "pila de Auctionator")
+  assert(not Atr.FromAuctionator("[string \"@Interface/AddOns/CraftersJournal/Scanner.lua\"]:12"), "pila de otro addon")
+  debugstack = function() return "[string \"@Interface\\AddOns\\Auctionator\\Source\\FullScan\\Frame.lua\"]:55: in function <x>" end
+  ES.db.scans[key].time = time() - 3600 -- (con precios de hace menos de 30 min no se lee nada)
+  ES.Scanner:OnForeignScan("modern")
+  assert(not ES.Scanner:IsBusy() and Atr.awaiting, "el escaneo de Auctionator se lee otra vez en lugar de esperar sus precios")
+  assert(CB, "no se pidió el aviso de Auctionator al guardar")
+  CB()
+  CB() -- (guarda por partes: una sola importación)
+  Pump()
+  scan = ES.db.scans[key]
+  assert(scan.source == "auctionator" and scan.items[2318].minUnit == 77, "tras su escaneo completo no se tomaron sus precios")
+  assert(not scan.items[999999], "tras un escaneo completo, lo que no está en la AH ya no está")
+  -- Otro addon (no Auctionator) y precios viejos: se lee como siempre
+  debugstack = function() return "[string \"@Interface/AddOns/ForeverForge/Scan.lua\"]:5" end
+  assert(not Atr:TakeOver(), "el escaneo de otro addon lo toma Auctionator")
+  -- Opción desactivada
+  ES.db.noAuctionator = true
+  debugstack = function() return "@Interface/AddOns/Auctionator/Source/FullScan/Frame.lua:55" end
+  assert(not Atr:Enabled() and not Atr:TakeOver(), "con la opción desactivada se usan los precios de Auctionator")
+  ES.db.noAuctionator = nil
+  -- Precios recientes: el escaneo de otro addon no se lee (congelaba el juego al abrir la AH)
+  debugstack = function() return "" end
+  ES.db.scans[key].time = time() - 60
+  ES.Scanner:OnForeignScan("modern")
+  assert(not ES.Scanner:IsBusy(), "con precios de hace 1 min se lee el escaneo de otro addon")
+  ES.db.noFollowScans = true
+  ES.db.scans[key].time = time() - 3 * 3600
+  ES.Scanner:OnForeignScan("modern")
+  assert(not ES.Scanner:IsBusy(), "con la opción desactivada se lee el escaneo de otro addon")
+  ES.db.noFollowScans = nil
+  Auctionator, debugstack, C_Timer.After, ES.db.scans[key], ES.db.lastFullScan = nil, savedStack, savedAfter, savedScan, savedLast
+  Atr.registered, Atr.bootstrapTried, Atr.awaiting, Atr.collecting, Atr.queued = nil, nil, nil, nil, nil
+  ES.Scanner.statusText, ES.Print = savedStatus, savedPrint
+  ES.countdownTicking = false
+  log[#log+1] = "     auctionator: sus precios sin escaneo propio, y su escaneo completo no se lee dos veces"
+end)
+step("recetas de misión: lo que piden entregar tiene precio", function()
+  local WP = ES.Waypoints
+  local q = WP.Quest(2852)
+  assert(q and q.items and #q.items == 3, "la misión de Wild Leather Leggings no dice qué pide")
+  local prices = { [8191] = { minUnit = 5000 }, [8198] = { minUnit = 3000 }, [8153] = { minUnit = 200 } }
+  local t = WP.TurnInCost(q, prices, "Leatherworking")
+  assert(t and t.cost == 2 * 5000 + 2 * 3000 + 2 * 200 and t.farm == 0, "coste de lo que pide: " .. tostring(t and t.cost))
+  for _, line in ipairs(t.lines) do assert(line.how == "ah", "cada objeto, de la AH: " .. tostring(line.how)) end
+  -- Fabricarlo sale más barato que comprarlo hecho: se cuenta fabricado
+  local helm
+  for _, r in pairs(ES.Data.Leatherworking.recipes) do if r.out and r.out[1] == 8191 and not r.scroll then helm = r end end
+  if helm then
+    local cheap = { [8191] = { minUnit = 999999 }, [8198] = { minUnit = 3000 }, [8153] = { minUnit = 200 } }
+    for _, rq in ipairs(helm.r) do cheap[rq[1]] = { minUnit = 1 } end
+    local t2 = WP.TurnInCost(q, cheap, "Leatherworking")
+    assert(t2.lines[1].how == "craft" and t2.lines[1].unit < 999999, "Turtle Scale Helm fabricado: " .. tostring(t2.lines[1].how))
+  end
+  -- Lo que no tiene precio (Okra, botín de misión) no suma: hay que conseguirlo
+  local stew = WP.TurnInCost(WP.Quest(38), {}, "Cooking")
+  assert(stew and stew.farm >= 1, "Westfall Stew: Okra sin precio")
+  -- La receta: misión frente a la AH, gana la más barata contando lo que pide
+  local recipe = ES.Data.Leatherworking.recipes[10572]
+  local src = WP.RecipeSource(recipe, { [8191] = { minUnit = 5000 }, [8198] = { minUnit = 3000 }, [8153] = { minUnit = 200 },
+    [recipe.scroll] = { minUnit = 9000, listings = 1 } })
+  assert(src and src.best and src.best.kind == "ah" and src.best.cost == 9000, "la AH (90s) es más barata que la misión (1g 64s): " .. tostring(src and src.best and src.best.kind))
+  src = WP.RecipeSource(recipe, { [8191] = { minUnit = 5000 }, [8198] = { minUnit = 3000 }, [8153] = { minUnit = 200 },
+    [recipe.scroll] = { minUnit = 90000, listings = 1 } })
+  assert(src.best.kind == "quest" and src.best.cost == 16400 and src.turnIns[src.best.quest.id], "la misión es más barata: " .. tostring(src.best.kind) .. " " .. tostring(src.best.cost))
+  log[#log+1] = "     misión de Wild Leather Leggings: pide " .. ES.Money(16400) .. " en objetos"
+end)
+step("equipo imprescindible: piezas para tu clase y especialización en la ruta", function()
+  local Gear = ES.Gear
+  local saved = { UnitClass, UnitLevel, GetItemInfoInstant, GetItemInfo, GetItemStats, GetNumTalentTabs, ES.db.prof.Leatherworking }
+  local GLOVES, VEST = 4253, 2300 -- Toughened Leather Gloves (azul, receta 3770) y Embossed Leather Vest (verde)
+  local STATS = { link4253 = { ITEM_MOD_AGILITY_SHORT = 6, ITEM_MOD_STAMINA_SHORT = 3 }, link2300 = { ITEM_MOD_AGILITY_SHORT = 3 } }
+  local class = "ROGUE"
+  UnitClass = function() return class == "ROGUE" and "Rogue" or "Mage", class end
+  UnitLevel = function() return 20 end
+  GetNumTalentTabs = nil
+  GetItemInfoInstant = function(id)
+    if id == GLOVES then return id, "Armor", "Leather", "INVTYPE_HAND", 134400, 4, 2 end
+    if id == VEST then return id, "Armor", "Leather", "INVTYPE_CHEST", 134400, 4, 2 end
+    return id, "Trade", "x", "", 134400, 7, 0
+  end
+  GetItemInfo = function(id)
+    if id == GLOVES then return "Toughened Leather Gloves", "link4253", 3, 25, 20, "Armor", "Leather", 1, "INVTYPE_HAND", 134400, 100, 4, 2 end
+    if id == VEST then return "Embossed Leather Vest", "link2300", 2, 18, 15, "Armor", "Leather", 1, "INVTYPE_CHEST", 134400, 100, 4, 2 end
+    return nil
+  end
+  GetItemStats = function(link) return STATS[link] end
+  ES.db.prof.Leatherworking = {}
+  ES.charData.gearSpec = nil
+  Gear.ClearCache()
+  Gear:Changed()
+  -- Lo básico: características, armadura por clase y nivel, armas
+  assert(Gear.StatOf("ITEM_MOD_AGILITY_SHORT") == "agi" and Gear.StatOf("ITEM_MOD_SPELL_POWER_SHORT") == "spell"
+    and Gear.StatOf("RESISTANCE0_NAME") == nil, "características")
+  assert(Gear.Wearable({ classID = 4, subclassID = 3, reqLevel = 30 }, "HUNTER", 30) == false, "un cazador de nivel 30 no lleva malla")
+  assert(Gear.Wearable({ classID = 4, subclassID = 3, reqLevel = 40 }, "HUNTER", 40), "un cazador de nivel 40 lleva malla")
+  assert(Gear.Wearable({ classID = 4, subclassID = 4, reqLevel = 45 }, "WARRIOR", 45) and not Gear.Wearable({ classID = 4, subclassID = 4, reqLevel = 45 }, "ROGUE", 45), "placas")
+  assert(Gear.Wearable({ classID = 2, subclassID = 15 }, "ROGUE", 20) and not Gear.Wearable({ classID = 2, subclassID = 1 }, "ROGUE", 20), "armas del pícaro")
+  assert(Gear.Wearable({ equipLoc = "INVTYPE_CLOAK", classID = 4, subclassID = 1 }, "WARRIOR", 20), "las capas, todos")
+  -- Pícaro sin talentos: Combate (agilidad). Los guantes azules se recomiendan; el chaleco verde, no
+  local spec = Gear:Spec()
+  assert(spec and spec.key == "combat" and spec.role == "agi" and spec.auto, "especialización por defecto del pícaro: " .. tostring(spec and spec.key))
+  local c = Gear:Candidates("Leatherworking")
+  local rec, other = {}, {}
+  for _, e in ipairs(c.recommended) do rec[e.id] = true end
+  for _, e in ipairs(c.other) do other[e.id] = true end
+  assert(rec[3770], "los guantes azules de agilidad no se recomiendan a un pícaro")
+  assert(not rec[2160] and other[2160], "el chaleco verde va en 'otras', no recomendado")
+  -- En la ruta: el nivel en que se aprenden (110) se sube fabricándolos
+  local opts = ES:PlanOptions("Leatherworking", 100, 150, nil)
+  assert(opts.pinned and opts.pinned[110] == 3770, "los guantes no van en la ruta a 110")
+  assert(Gear:PickQty("Leatherworking", 3770) == 1, "una para ti por defecto")
+  -- Dos: dos niveles
+  Gear:SetQty("Leatherworking", 3770, 2)
+  opts = ES:PlanOptions("Leatherworking", 100, 150, nil)
+  assert(opts.pinned[110] == 3770 and opts.pinned[111] == 3770, "con 2, dos niveles")
+  -- Con el planificador: el paso de los guantes está en la ruta (si sus materiales tienen precio)
+  local key = ES:RealmKey()
+  local savedScan = ES.db.scans[key]
+  local items = {}
+  for id, e in pairs(savedScan and savedScan.items or {}) do items[id] = e end
+  for _, rq in ipairs(ES.Data.Leatherworking.recipes[3770].r) do items[rq[1]] = items[rq[1]] or { minUnit = 100, quantity = 500 } end
+  ES.db.scans[key] = { time = time(), items = items }
+  local plan = ES.Planner:Plan(ES.Data.Leatherworking, opts)
+  ES.db.scans[key] = savedScan
+  assert(plan.choice[110] == 3770 and plan.choice[111] == 3770, "la ruta no sube 110-111 con los guantes: " .. tostring(plan.choice[110]))
+  local status = Gear:Status("Leatherworking", plan)
+  assert(status[1] and status[1].status == "route", "estado de la pieza: " .. tostring(status[1] and status[1].status))
+  -- Quitarla (0): fuera de la ruta; Restablecer: vuelve
+  Gear:SetQty("Leatherworking", 3770, 0)
+  opts = ES:PlanOptions("Leatherworking", 100, 150, nil)
+  assert(not (opts.pinned and opts.pinned[110]), "quitada sigue en la ruta")
+  Gear:Reset("Leatherworking")
+  assert(Gear:PickQty("Leatherworking", 3770) == 1, "restablecer no la devuelve")
+  -- Desde tu nivel ya no da puntos: fuera de la ruta, con su motivo
+  opts = ES:PlanOptions("Leatherworking", 170, 225, nil)
+  assert(not (opts.pinned and opts.pinned[170]), "una pieza gris va en la ruta")
+  -- Añadir una de las otras (el chaleco verde)
+  Gear:SetQty("Leatherworking", 2160, 1)
+  assert(Gear:PickQty("Leatherworking", 2160) == 1, "no se pudo añadir el chaleco")
+  -- Otra especialización elegida (Sutileza sigue siendo agilidad); un mago no lleva cuero
+  Gear:SetSpec("sub")
+  assert(Gear:Spec().key == "sub" and not Gear:Spec().auto, "no se eligió la especialización")
+  Gear:SetSpec(nil)
+  class = "MAGE"
+  Gear:Changed()
+  c = Gear:Candidates("Leatherworking")
+  assert(#c.recommended == 0 and #c.other == 0, "a un mago se le recomienda cuero")
+  class = "ROGUE"
+  -- Intelecto y espíritu: no le sirve a un pícaro
+  STATS.link4253 = { ITEM_MOD_INTELLECT_SHORT = 6, ITEM_MOD_SPIRIT_SHORT = 3 }
+  Gear.ClearCache()
+  Gear:Changed()
+  c = Gear:Candidates("Leatherworking")
+  for _, e in ipairs(c.recommended) do assert(e.id ~= 3770, "guantes de intelecto recomendados a un pícaro") end
+  -- El icono: lo desactiva (y la ruta ya no los lleva)
+  local page
+  for _, p in ipairs(ES.professionPages) do if p.profKey == "Leatherworking" then page = p end end
+  assert(page and page.gearButton, "falta el icono de equipo imprescindible")
+  page.gearButton._scripts.OnEnter(page.gearButton)
+  page.gearButton._scripts.OnClick(page.gearButton, "LeftButton")
+  assert(ES.db.prof.Leatherworking.gearOff and not Gear:On("Leatherworking"), "el icono no lo desactivó")
+  page.gearButton._scripts.OnClick(page.gearButton, "LeftButton")
+  assert(Gear:On("Leatherworking"), "el icono no lo volvió a activar")
+  -- Clic derecho: la ventana para elegir
+  STATS.link4253 = { ITEM_MOD_AGILITY_SHORT = 6, ITEM_MOD_STAMINA_SHORT = 3 }
+  Gear.ClearCache()
+  Gear:Changed()
+  page.gearButton._scripts.OnClick(page.gearButton, "RightButton")
+  local gp = ES:GearPanel()
+  assert(gp and gp.rows[1], "clic derecho no abrió la ventana del equipo")
+  local plusRow
+  for _, row in ipairs(gp.rows) do if row.recipeID == 3770 then plusRow = row end end
+  assert(plusRow, "la ventana no lista los guantes con su +")
+  plusRow.plus._scripts.OnClick(plusRow.plus)
+  assert(Gear:PickQty("Leatherworking", 3770) == 2, "el + de la ventana no sumó")
+  gp:Hide()
+  Gear:Reset("Leatherworking")
+  -- La ruta en pantalla: el paso de los guantes lleva la estrella y "guarda 1 para ti"
+  local savedScan2 = ES.db.scans[key]
+  ES.db.scans[key] = { time = time(), items = items }
+  page.from = 100
+  page.toBox._text = "150"
+  ES:SelectPage("Leatherworking")
+  ES:CalculatePlan(page)
+  local marked
+  for _, line in ipairs(page.lines or {}) do if line.gearKeep then marked = line end end
+  ES.db.scans[key] = savedScan2
+  assert(marked and tostring(marked.sub):find("UI%-RaidTargetingIcon_1"), "el paso de la pieza no lleva la marca de imprescindible")
+  ES:SelectPage("home")
+  UnitClass, UnitLevel, GetItemInfoInstant, GetItemInfo, GetItemStats, GetNumTalentTabs, ES.db.prof.Leatherworking = unpack(saved, 1, 7)
+  ES.charData.gearSpec = nil
+  Gear.ClearCache()
+  Gear:Changed()
+  log[#log+1] = "     equipo imprescindible: guantes azules de agilidad para un pícaro, a 110 en la ruta"
 end)
 step("estado escaneo sin AH", function() ES.Scanner:Start() end)
 

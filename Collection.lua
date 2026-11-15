@@ -181,19 +181,24 @@ end
 -- avisa como mucho una vez cada ALERT_AGAIN: ahora hay un escaneo cada vez que abres
 -- la AH (el de otro addon) y el mismo aviso se repetía en cada visita
 local ALERT_AGAIN = 24 * 3600
+-- Solo con su opción (ES.db.scrollAlerts, por defecto no: CurseForge, "recetas que ni
+-- están en la ruta ni me interesan" en cada visita a la AH) y solo las que ya puedes
+-- aprender con tu nivel de la profesión
 function Collection:AlertScan(scan)
-  if not scan or not scan.items or ES.db.noChatAlerts then return end -- (opción: Options.lua)
+  if not scan or not scan.items or not ES.db.scrollAlerts then return end -- (opción: Options.lua)
   if type(ES.db.scrollAlerts) ~= "table" then ES.db.scrollAlerts = {} end
   local alerted, now = ES.db.scrollAlerts, time()
   for id, t in pairs(alerted) do if now - t > ALERT_AGAIN then alerted[id] = nil end end
   local found = {}
   for _, p in ipairs(ES.PROFESSIONS) do
     local data = ES.Data[p.key]
-    if data and ES:GetProfessionSkill(data.skillLine) then
+    local skill = data and ES:GetProfessionSkill(data.skillLine)
+    if skill then
       ES.Planner.Annotate(data)
       for id, r in pairs(data.recipes) do
         local ah = r.scroll and scan.items[r.scroll]
-        if ah and ah.minUnit and not ES:IsRecipeKnown(id) and not alerted[id] and #(ES.Waypoints.Vendors(r.scroll) or {}) == 0
+        if ah and ah.minUnit and not ES:IsRecipeKnown(id) and not alerted[id] and (r.train or 1) <= skill
+          and #(ES.Waypoints.Vendors(r.scroll) or {}) == 0
           and #(ES.Waypoints.QuestsFor(r.scroll) or {}) == 0 then
           found[#found + 1] = { id = id, name = r.name, price = ah.minUnit, prof = ES:ProfLabel(p.key) }
         end

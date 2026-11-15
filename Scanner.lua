@@ -28,6 +28,7 @@ local SERVER_LIMIT = 15 * 60
 -- CraftersJournalDB.lastFullScan[personaje u "otro addon"] = hora de la última petición;
 -- cuenta la más reciente de todas.
 local OTHER_ADDON = "otro addon"
+local FOLLOW_FRESH = 30 * 60 -- con precios de hace menos, no se lee el escaneo de otro addon
 local function LastFullScan()
   if type(ES.db.lastFullScan) ~= "table" then ES.db.lastFullScan = {} end
   return ES.db.lastFullScan
@@ -485,6 +486,24 @@ function Scanner:OnForeignScan(api)
   if self.ownRequest or not ES.db then return end
   LastFullScan()[OTHER_ADDON] = time()
   ES:ScanLog("otro addon pidió un escaneo completo (API " .. api .. ")")
+  -- Lo pide Auctionator y nos avisará al guardar sus precios: no se lee dos veces
+  -- (AuctionatorPrices.lua). Si no, se lee como siempre
+  if not self:IsBusy() and ES.AtrPrices and ES.AtrPrices:TakeOver() then
+    SetStatus(L["Auctionator está escaneando la AH: sus precios se usarán al terminar (no se vuelve a leer el escaneo)."])
+    ES:RefreshScanButtons()
+    return
+  end
+  -- Leer el escaneo de otro addon congela el juego unos segundos al abrir la AH
+  -- (CurseForge). No se lee si lo desactivas (ES.db.noFollowScans, Options.lua) ni si
+  -- tus precios son de hace menos de FOLLOW_FRESH: apenas habrán cambiado
+  local scan = ES.db.scans and ES.db.scans[ES:RealmKey()]
+  if not self:IsBusy() and (ES.db.noFollowScans or (scan and time() - (scan.time or 0) < FOLLOW_FRESH)) then
+    ES:ScanLog(ES.db.noFollowScans and "no se lee (opción)" or "no se lee: precios recientes")
+    SetStatus(string.format(L["Otro addon acaba de pedir un escaneo completo: el servidor no permitirá otro hasta dentro de %s."],
+      ES.Countdown(self:SecondsUntilNextScan())))
+    ES:RefreshScanButtons()
+    return
+  end
   if not self:IsBusy() then
     -- Lo que hay ahora, antes de que lleguen los datos nuevos (para no tomar por
     -- nuevas las subastas de un escaneo anterior)
