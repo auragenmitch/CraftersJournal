@@ -9,6 +9,8 @@ A World of Warcraft: Forever addon to **level every profession the cheapest way*
 
 Download it from CurseForge (link coming soon).
 
+WowUp: Install from URL with https://github.com/auragenmitch/CraftersJournal.
+
 ## Development
 
 - The addon code is this folder. In WoW, `Interface\AddOns\CraftersJournal` can be a directory junction to it.

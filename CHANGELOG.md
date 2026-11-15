@@ -1,7 +1,9 @@
 # Crafter's Journal
 
-## Unreleased
+## 0.53.1
 
+- **The version line matches what actually ships.** This is upstream 0.53.0 plus the changes that follow: the Auctionator price fallback, can't-miss gear picks, opt-in two-click AH selling, not suggesting consumables, quest items or recent purchases for sale, the missing-recipe alert off by default, and quest recipe pricing. The addon's version is 0.53.1.
+- **GitHub releases publish a -forever zip for WowUp.** A version tag uploads `CraftersJournal-<version>-forever.zip`. WowUp only installs a GitHub addon for WoW Forever when the zip's name ends in `-forever`.
 - **New route icon: Can't-miss gear for your class and spec.** Next to the other route icons (quests, limited-stock vendors, Merchant's Favor, fewer crafts, bags) there's a new gear icon, on by default. The route now includes crafting this profession's blue pieces that your character can actually use while leveling: the right armor type for your class at that level (mail before 40 and plate from 40 for warriors and paladins, and so on), weapons your class can use, not already too low for your level, and with your spec's stats (Agility for a rogue, Intellect and Spirit for a healer...). The piece is crafted at the first skill level where its recipe gives points, so its cost is already in the route, the Materials view and the shopping list. Those steps show a star and "Can't-miss: keep 1 for yourself", and neither the Profit view nor the Inventory tab suggests selling them. Greens aren't recommended, but you can add any piece you like.
   - **Right-click the icon** to choose: your spec (taken from your talents, or pick another), how many of each piece (- / +; 0 removes it), and a list of every other piece from the profession you can wear, to add with +. "Reset" goes back to the recommendations. Each change recalculates the route; a started route doesn't change.
   - Pieces the route can't include (they no longer give points from your skill, they're above your target, their recipe can't be had right now, or a material has no price) are listed below the route with the reason.

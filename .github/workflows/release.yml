@@ -1,12 +1,14 @@
-# Publica en CurseForge al crear una etiqueta de versión (por ejemplo v1.0.0).
+# Publica al crear una etiqueta v* (por ejemplo v0.53.0).
 #
-# Necesita en GitHub (Settings > Secrets and variables > Actions):
-#   CF_API_KEY: token de la API de CurseForge (https://authors.curseforge.com/account/api-tokens)
-# y en CraftersJournal.toc la línea  ## X-Curse-Project-ID: <número del proyecto>
+# GitHub: siempre. El zip se llama CraftersJournal-<versión>-forever.zip.
+# WowUp solo instala addons de WoW Forever desde un zip cuyo nombre termina
+# en -forever. Dentro va la carpeta CraftersJournal/, como tools/package.py.
+# La versión del nombre es la de la etiqueta (sin la v inicial).
 #
-# El empaquetador (BigWigsMods/packager) arma el zip según .pkgmeta y lo sube con
-# las notas de CHANGELOG.md. La versión de juego es la de WoW Forever (1.60.1).
-name: Publicar en CurseForge
+# CurseForge: solo si el secreto CF_API_KEY está definido. Sin él este job
+# sigue en verde y no llama al empaquetador. El empaquetador no recibe token
+# de GitHub, para no crear otro release con otro nombre de zip.
+name: Publicar
 
 on:
   push:
@@ -16,9 +18,6 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
-    env:
-      CF_API_KEY: ${{ secrets.CF_API_KEY }}
-      GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: write
     steps:
@@ -26,6 +25,56 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: BigWigsMods/packager@v2
+      - name: Empaquetar el addon
+        run: python3 tools/package.py
+
+      - name: Publicar el release en GitHub
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${VERSION%-forever}"
+          if [ -z "$VERSION" ]; then
+            echo "La etiqueta no trae versión: ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+          TOC_VERSION="$(sed -n 's/^## Version:[[:space:]]*//p' CraftersJournal.toc | head -n 1 | tr -d '\r')"
+          SRC="dist/CraftersJournal-${TOC_VERSION}.zip"
+          DEST="dist/CraftersJournal-${VERSION}-forever.zip"
+          test -s "$SRC"
+          cp -f "$SRC" "$DEST"
+          python3 - "$DEST" << 'PY'
+          import sys, zipfile
+          path = sys.argv[1]
+          with zipfile.ZipFile(path) as z:
+              names = [n.replace("\\", "/") for n in z.namelist()]
+          if not names or any(not n.startswith("CraftersJournal/") for n in names):
+              raise SystemExit("el zip no tiene la carpeta CraftersJournal/ en la raíz")
+          if not any(n.endswith("CraftersJournal.toc") for n in names):
+              raise SystemExit("falta CraftersJournal.toc en el zip")
+          print(f"zip ok ({len(names)} archivos)")
+          PY
+          gh release create "$GITHUB_REF_NAME" "$DEST" \
+            --title "Crafter's Journal ${VERSION}" \
+            --notes-file CHANGELOG.md
+
+      - name: Comprobar el secreto de CurseForge
+        id: cf
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+        run: |
+          if [ -n "${CF_API_KEY}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "CF_API_KEY no está definido: no se sube a CurseForge."
+          fi
+
+      - name: Publicar en CurseForge
+        if: steps.cf.outputs.enabled == 'true'
+        uses: BigWigsMods/packager@v2
         with:
           args: -g 1.60.1
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
